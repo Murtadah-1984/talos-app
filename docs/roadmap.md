@@ -52,11 +52,36 @@ testable — no phase depends on unfinished work from a later phase to run.
 
 ## Phase 3 — GitOps (GitHub)
 
-- [ ] `GitProvider` port + GitHub implementation
-- [ ] GitOps repository scaffolding generator (`gitops/clusters/...` layout)
-- [ ] Manifest generation (cluster.yaml, infrastructure.yaml, control-plane.yaml, workers.yaml)
-- [ ] Branch/commit/PR workflow for cluster changes
-- [ ] End-to-end: cluster request → Git commit → PR → merge
+- [x] `GitProvider` port + real GitHub implementation
+      (`internal/integrations/github/client.go`), using `go-github` and the Git Data
+      API so a whole manifest set commits atomically (branch create, blob-inlined tree,
+      commit, ref update, PR create/get/merge). Selected via
+      `PLATFORM_GITHUB_ADAPTER=real` + `PLATFORM_GITHUB_TOKEN` (default `mock`); see
+      `internal/integrations/github/factory.go`.
+- [x] Manifest generation (`internal/application/gitopsrender`): pure, deterministic
+      rendering of `cluster.yaml`, `infrastructure.yaml`, `control-plane.yaml`,
+      `workers.yaml`, and (when Argo CD is enabled) `argocd-application.yaml` — the
+      `gitops/clusters/<name>/...` layout from §3. Deliberately no Kustomize, per §3's
+      own preference for Helm.
+- [x] Branch/commit/PR workflow for cluster changes — wired into the
+      `commit-to-git`/`create-pull-request`/`await-and-merge-pull-request` steps of
+      `NewClusterProvisionDefinition`, including CAPI manifests when the cluster's
+      provider mode is `CLUSTER_API`. Fixed a Phase-1 bug in the process: the commit
+      and PR steps had computed two different, non-matching branch names.
+- [x] `gitops.ChangeSet` now tracks real status transitions (`PR_CREATED` ->
+      `MERGED` -> `SYNCED`) instead of being created once and left stale.
+- [x] End-to-end test (`TestClusterProvisionWorkflow_EndToEnd`) exercising the full
+      cluster request → Git commit → PR → merge → Argo CD sync → READY pipeline
+      against the mock adapters.
+- [ ] **GitOps repository scaffolding generator** — bootstrapping a brand-new `gitops/`
+      repository's top-level layout (`infrastructure/`, `applications/`, App-of-Apps
+      root Applications per §3–§4) is not yet built; today the renderer only produces
+      one cluster's `clusters/<name>/` subtree, assuming the repository and its
+      Argo CD App-of-Apps root already exist.
+- [ ] The human-in-the-loop approval gate (§4) is not yet webhook-driven — the
+      `await-and-merge-pull-request` step merges immediately rather than pausing for a
+      GitHub PR-merged webhook. Needed before this pipeline is safe for
+      review-required production changes.
 
 ## Phase 4 — Argo CD
 

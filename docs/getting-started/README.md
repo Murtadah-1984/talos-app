@@ -56,3 +56,16 @@ export PLATFORM_TALOS_CONFIG_FILE=/path/to/talosconfig   # from `talosctl config
 
 See [../talos/README.md](../talos/README.md) for what the real client does and its
 current limitations.
+
+## GitHub: mock vs. real
+
+By default (`PLATFORM_GITHUB_ADAPTER=mock`) cluster provisioning commits/PRs/merges
+against an in-memory stand-in for GitHub. To point at a real repository:
+
+```bash
+export PLATFORM_GITHUB_ADAPTER=real
+export PLATFORM_GITHUB_TOKEN=ghp_...   # a PAT or GitHub App installation token
+```
+
+See [../gitops/README.md](../gitops/README.md) for what the real client does and
+what's still open (repository scaffolding, webhook-driven approval).

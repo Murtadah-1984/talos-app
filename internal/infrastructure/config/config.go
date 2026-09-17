@@ -41,6 +41,14 @@ type Config struct {
 	// for per-cluster credential resolution via the SecretStore.
 	TalosConfigFile string
 
+	// GitHubToken is a personal access token or GitHub App installation
+	// token used to construct the real GitHub client when GitHubAdapterMode
+	// is "real". Same Phase-2-style bootstrapping simplification as
+	// TalosConfigFile — see docs/roadmap.md for moving this to the
+	// SecretStore-backed path (github.LoadClientFromSecretStore already
+	// exists for that).
+	GitHubToken string
+
 	SecretStoreBackend string // "local" (dev, AES-GCM at rest) or "vault"
 	SecretStoreKeyHex  string // 32-byte hex key for the local backend
 }
@@ -109,6 +117,7 @@ func Load() (Config, error) {
 		ClusterAPIAdapterMode: getenv("PLATFORM_CLUSTERAPI_ADAPTER", "mock"),
 		ProxmoxAdapterMode:    getenv("PLATFORM_PROXMOX_ADAPTER", "mock"),
 		TalosConfigFile:       getenv("PLATFORM_TALOS_CONFIG_FILE", ""),
+		GitHubToken:           getenv("PLATFORM_GITHUB_TOKEN", ""),
 		SecretStoreBackend:    getenv("PLATFORM_SECRETSTORE_BACKEND", "local"),
 		SecretStoreKeyHex:     getenv("PLATFORM_SECRETSTORE_KEY_HEX", ""),
 	}
@@ -121,6 +130,12 @@ func Load() (Config, error) {
 	}
 	if cfg.TalosAdapterMode == "real" && cfg.TalosConfigFile == "" {
 		return Config{}, fmt.Errorf("PLATFORM_TALOS_ADAPTER=real requires PLATFORM_TALOS_CONFIG_FILE to point at a talosconfig")
+	}
+	if cfg.GitHubAdapterMode != "mock" && cfg.GitHubAdapterMode != "real" {
+		return Config{}, fmt.Errorf("invalid PLATFORM_GITHUB_ADAPTER %q: must be \"mock\" or \"real\"", cfg.GitHubAdapterMode)
+	}
+	if cfg.GitHubAdapterMode == "real" && cfg.GitHubToken == "" {
+		return Config{}, fmt.Errorf("PLATFORM_GITHUB_ADAPTER=real requires PLATFORM_GITHUB_TOKEN")
 	}
 	return cfg, nil
 }

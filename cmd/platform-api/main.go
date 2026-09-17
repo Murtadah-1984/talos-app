@@ -102,7 +102,11 @@ func main() {
 		logger.Error("constructing Talos client", "error", err)
 		os.Exit(1)
 	}
-	gitProvider := github.NewMockProvider()
+	gitProvider, err := github.NewFromConfig(cfg.GitHubAdapterMode, cfg.GitHubToken)
+	if err != nil {
+		logger.Error("constructing GitHub client", "error", err)
+		os.Exit(1)
+	}
 	argoClient := argocd.NewMockClient()
 	capiProvider := clusterapi.NewMockProvider()
 
