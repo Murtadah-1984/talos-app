@@ -19,6 +19,7 @@ import (
 	"github.com/talos-platform/talos-platform/internal/integrations/argocd"
 	"github.com/talos-platform/talos-platform/internal/integrations/clusterapi"
 	"github.com/talos-platform/talos-platform/internal/integrations/github"
+	"github.com/talos-platform/talos-platform/internal/integrations/talos"
 	"github.com/talos-platform/talos-platform/internal/observability"
 	"github.com/talos-platform/talos-platform/internal/workflows"
 	"github.com/talos-platform/talos-platform/migrations"
@@ -56,6 +57,7 @@ func main() {
 	defer pool.Close()
 
 	clusters := postgres.NewClusterRepository(pool)
+	machines := postgres.NewMachineRepository(pool)
 	gitopsRepo := postgres.NewGitOpsRepository(pool)
 	workflowRepo := postgres.NewWorkflowRepository(pool)
 	auditRepo := postgres.NewAuditRepository(pool)
@@ -68,12 +70,18 @@ func main() {
 		broker = mqBroker
 	}
 
+	talosClient, err := talos.NewFromConfig(cfg.TalosAdapterMode, cfg.TalosConfigFile)
+	if err != nil {
+		logger.Error("constructing Talos client", "error", err)
+		os.Exit(1)
+	}
 	gitProvider := github.NewMockProvider()
 	argoClient := argocd.NewMockClient()
 	capiProvider := clusterapi.NewMockProvider()
 
 	deps := workflows.ClusterProvisionDeps{
-		Clusters: clusters, GitOps: gitopsRepo, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
+		Clusters: clusters, Machines: machines, GitOps: gitopsRepo,
+		Talos: talosClient, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
 	}
 
 	engine := workflows.NewEngine(workflowRepo, broker, auditRepo)

@@ -20,11 +20,35 @@ testable — no phase depends on unfinished work from a later phase to run.
 
 ## Phase 2 — Talos Integration
 
-- [ ] Real Talos gRPC client (`internal/integrations/talos`) behind the `TalosClient` port
-- [ ] Machine discovery, health, version, service/disk/network inspection
-- [ ] Machine operations: reboot, shutdown, upgrade, config apply
-- [ ] Cluster discovery via Talos (`DIRECT_TALOS` mode)
-- [ ] Integration tests against a real or emulated Talos endpoint
+- [x] Real Talos gRPC client (`internal/integrations/talos/client.go`) behind the
+      `TalosClient` port, using the official
+      `github.com/siderolabs/talos/pkg/machinery/client`. Selected via
+      `PLATFORM_TALOS_ADAPTER=real` (default `mock`); see
+      `internal/integrations/talos/factory.go`.
+- [x] Health, version, service/disk/network inspection, etcd member health — via a mix
+      of the machine API (`ServiceList`, `Disks`, `EtcdStatus`, `Version`) and COSI
+      resource queries (`runtime.MachineStatus`, `network.HostnameStatus`,
+      `network.AddressStatus`).
+- [x] Machine operations: reboot, shutdown, upgrade, config apply/read — wired through
+      `machineservice` and used by the `check-talos-health` cluster-provisioning step.
+- [x] Unit tests for talosconfig parsing and apply-mode mapping; a real integration
+      test (`TestClient_AgainstLiveEndpoint`) gated behind `TALOS_TEST_ENDPOINT`/
+      `TALOS_TEST_CONFIG` env vars, skipped in CI since no live Talos node is available
+      there — run it locally against a kind/QEMU Talos node or real hardware.
+- [ ] **Known limitation**: `Client` is constructed from a single talosconfig
+      (`PLATFORM_TALOS_CONFIG_FILE`), covering one Talos cluster's PKI per platform
+      process. `ports.TalosClient` methods are keyed only by machine endpoint, not
+      cluster ID, so a real multi-cluster deployment needs per-cluster credential
+      resolution threaded through — tracked as follow-up work, not yet implemented.
+- [ ] Machine discovery (enumerating not-yet-known machines) — this is really an
+      infrastructure-provider concern (bare metal/Proxmox `DiscoverMachines`, §10) once
+      a machine already has an endpoint; nothing further to add on the Talos side.
+- [ ] Cluster discovery via Talos (`DIRECT_TALOS` mode) — inferring an existing
+      cluster's topology purely from querying its machines, for onboarding
+      already-running clusters the platform didn't provision itself.
+- [ ] Maintenance-mode (insecure, pre-PKI) connections for freshly-booted, not-yet-
+      configured machines — needed once Phase 6 bare-metal/Proxmox provisioning
+      workflows actually create machines and need to push their first configuration.
 
 ## Phase 3 — GitOps (GitHub)
 

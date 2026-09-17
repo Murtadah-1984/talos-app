@@ -8,6 +8,7 @@ import (
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/cluster"
 	"github.com/talos-platform/talos-platform/internal/domain/gitops"
+	"github.com/talos-platform/talos-platform/internal/domain/machine"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
 	"github.com/talos-platform/talos-platform/internal/domain/workflow"
 )
@@ -17,7 +18,9 @@ import (
 // swapped in without touching the step sequence itself (§23, ADR-0001..0004).
 type ClusterProvisionDeps struct {
 	Clusters   cluster.Repository
+	Machines   machine.Repository
 	GitOps     gitops.Repositories
+	Talos      ports.TalosClient
 	Git        ports.GitProvider
 	ArgoCD     ports.ArgoCDClient
 	ClusterAPI ports.ClusterAPIProvider
@@ -50,6 +53,31 @@ func transitionAndSave(ctx context.Context, clusters cluster.Repository, c *clus
 		return fmt.Errorf("transitioning cluster to %s: %w", next, err)
 	}
 	return clusters.Update(ctx, c)
+}
+
+// checkTalosHealth queries every machine currently assigned to c via the
+// TalosClient port (ADR-0001) and returns the number checked. A cluster with
+// no machines yet (infrastructure provisioning is Phase 6 work) is not an
+// error — there's simply nothing to check. Any unreachable or unhealthy
+// machine fails the step rather than being silently ignored.
+func checkTalosHealth(ctx context.Context, deps ClusterProvisionDeps, c *cluster.Cluster) (int, error) {
+	if deps.Machines == nil || deps.Talos == nil {
+		return 0, nil
+	}
+	machines, err := deps.Machines.List(ctx, machine.Filter{ClusterID: &c.ID}, shared.DefaultPage())
+	if err != nil {
+		return 0, fmt.Errorf("listing machines for cluster %s: %w", c.Name, err)
+	}
+	for _, m := range machines {
+		health, err := deps.Talos.GetHealth(ctx, m.ManagementIP)
+		if err != nil {
+			return 0, fmt.Errorf("checking Talos health for machine %s (%s): %w", m.Hostname, m.ManagementIP, err)
+		}
+		if !health.Healthy {
+			return 0, fmt.Errorf("machine %s (%s) reported unhealthy: %v", m.Hostname, m.ManagementIP, health.Details)
+		}
+	}
+	return len(machines), nil
 }
 
 // NewClusterProvisionDefinition builds the CLUSTER_PROVISION workflow
@@ -204,12 +232,14 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				return map[string]any{"capiReady": true}, nil
 			}),
 			step("check-talos-health", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
-				// Real check queries every control-plane/worker machine via
-				// TalosClient.GetHealth (Phase 2). Recorded here for shape.
 				if err := transitionAndSave(ctx, deps.Clusters, c, cluster.StateConfiguring); err != nil {
 					return nil, err
 				}
-				return map[string]any{"talosHealthy": true}, nil
+				checked, err := checkTalosHealth(ctx, deps, c)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"talosHealthy": true, "machinesChecked": checked}, nil
 			}),
 			step("check-kubernetes-health", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
 				return map[string]any{"kubernetesHealthy": true}, nil

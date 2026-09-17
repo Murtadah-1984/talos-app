@@ -33,9 +33,12 @@ type TalosClient interface {
 ```
 
 `internal/integrations/talos` implements this port using the official Talos Go client
-(`github.com/siderolabs/talos/pkg/machinery/client`) in Phase 2. A mock implementation
-lives alongside it for local development and tests, gated by configuration
-(`TALOS_ADAPTER=mock|real`).
+(`github.com/siderolabs/talos/pkg/machinery/client`) — done in Phase 2
+(`client.go`). A mock implementation (`mock.go`) lives alongside it for local
+development and tests, selected via `PLATFORM_TALOS_ADAPTER=mock|real`
+(`factory.go`). The real client is scoped to a single Talos cluster's PKI per
+process today; per-cluster credential resolution for multi-cluster deployments is
+tracked in `docs/roadmap.md` as follow-up work, not yet implemented.
 
 Imperative actions (reboot, health, discovery, logs, version) call this port directly
 from the application layer. Declarative desired state (which machines belong to which
@@ -49,5 +52,8 @@ source of truth.
 - Swapping or upgrading the Talos client library touches one package.
 - Business logic (upgrade planners, workflows) depends only on the interface, so it is
   trivially testable with the mock adapter.
-- Talos credentials (PKI, certs) are loaded by this layer from the credential store and
-  never leave the backend process.
+- Talos credentials (PKI, certs) never leave the backend process, and never reach the
+  browser (§48). Today they're loaded from a talosconfig file
+  (`PLATFORM_TALOS_CONFIG_FILE`) at process startup; `LoadClientFromSecretStore` exists
+  for loading from the SecretStore (ADR-0006) instead and is the intended production
+  path once credential upload/management is built.

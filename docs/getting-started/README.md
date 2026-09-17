@@ -42,3 +42,17 @@ docker compose up --build
 All configuration is environment-driven (§47) — see
 [`internal/infrastructure/config/config.go`](../../internal/infrastructure/config/config.go)
 for every variable and its default.
+
+## Talos: mock vs. real
+
+By default (`PLATFORM_TALOS_ADAPTER=mock`) the platform talks to an in-memory
+deterministic stand-in for Talos, so machine health/reboot/upgrade and cluster
+provisioning work without any real infrastructure. To point at a real Talos cluster:
+
+```bash
+export PLATFORM_TALOS_ADAPTER=real
+export PLATFORM_TALOS_CONFIG_FILE=/path/to/talosconfig   # from `talosctl config`
+```
+
+See [../talos/README.md](../talos/README.md) for what the real client does and its
+current limitations.

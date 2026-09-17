@@ -33,6 +33,14 @@ type Config struct {
 	ClusterAPIAdapterMode string
 	ProxmoxAdapterMode    string
 
+	// TalosConfigFile is a path to a talosconfig YAML (as produced by
+	// `talosctl config`) used to construct the real Talos client when
+	// TalosAdapterMode is "real". This is a Phase 2 bootstrapping
+	// simplification for a single-cluster deployment — see the limitation
+	// noted in internal/integrations/talos/client.go and docs/roadmap.md
+	// for per-cluster credential resolution via the SecretStore.
+	TalosConfigFile string
+
 	SecretStoreBackend string // "local" (dev, AES-GCM at rest) or "vault"
 	SecretStoreKeyHex  string // 32-byte hex key for the local backend
 }
@@ -100,12 +108,19 @@ func Load() (Config, error) {
 		ArgoCDAdapterMode:     getenv("PLATFORM_ARGOCD_ADAPTER", "mock"),
 		ClusterAPIAdapterMode: getenv("PLATFORM_CLUSTERAPI_ADAPTER", "mock"),
 		ProxmoxAdapterMode:    getenv("PLATFORM_PROXMOX_ADAPTER", "mock"),
+		TalosConfigFile:       getenv("PLATFORM_TALOS_CONFIG_FILE", ""),
 		SecretStoreBackend:    getenv("PLATFORM_SECRETSTORE_BACKEND", "local"),
 		SecretStoreKeyHex:     getenv("PLATFORM_SECRETSTORE_KEY_HEX", ""),
 	}
 
 	if cfg.Auth.Mode != "dev" && cfg.Auth.Mode != "oidc" {
 		return Config{}, fmt.Errorf("invalid PLATFORM_AUTH_MODE %q: must be \"dev\" or \"oidc\"", cfg.Auth.Mode)
+	}
+	if cfg.TalosAdapterMode != "mock" && cfg.TalosAdapterMode != "real" {
+		return Config{}, fmt.Errorf("invalid PLATFORM_TALOS_ADAPTER %q: must be \"mock\" or \"real\"", cfg.TalosAdapterMode)
+	}
+	if cfg.TalosAdapterMode == "real" && cfg.TalosConfigFile == "" {
+		return Config{}, fmt.Errorf("PLATFORM_TALOS_ADAPTER=real requires PLATFORM_TALOS_CONFIG_FILE to point at a talosconfig")
 	}
 	return cfg, nil
 }

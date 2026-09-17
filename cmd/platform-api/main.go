@@ -97,21 +97,24 @@ func main() {
 		broker = mqBroker
 	}
 
-	talosClient := talos.NewMockClient()
+	talosClient, err := talos.NewFromConfig(cfg.TalosAdapterMode, cfg.TalosConfigFile)
+	if err != nil {
+		logger.Error("constructing Talos client", "error", err)
+		os.Exit(1)
+	}
 	gitProvider := github.NewMockProvider()
 	argoClient := argocd.NewMockClient()
 	capiProvider := clusterapi.NewMockProvider()
 
+	workflowDeps := workflows.ClusterProvisionDeps{
+		Clusters: clusters, Machines: machines, GitOps: gitopsRepo,
+		Talos: talosClient, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
+	}
+
 	engine := workflows.NewEngine(workflowRepo, broker, auditRepo)
-	engine.Register(workflows.NewClusterProvisionDefinition(workflows.ClusterProvisionDeps{
-		Clusters: clusters, GitOps: gitopsRepo, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
-	}))
-	engine.Register(workflows.NewClusterUpgradeDefinition(workflows.ClusterProvisionDeps{
-		Clusters: clusters, GitOps: gitopsRepo, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
-	}))
-	engine.Register(workflows.NewWorkerScaleDefinition(workflows.ClusterProvisionDeps{
-		Clusters: clusters, GitOps: gitopsRepo, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
-	}))
+	engine.Register(workflows.NewClusterProvisionDefinition(workflowDeps))
+	engine.Register(workflows.NewClusterUpgradeDefinition(workflowDeps))
+	engine.Register(workflows.NewWorkerScaleDefinition(workflowDeps))
 	if err := engine.StartConsuming(ctx); err != nil {
 		logger.Error("starting workflow dispatch consumer", "error", err)
 		os.Exit(1)
