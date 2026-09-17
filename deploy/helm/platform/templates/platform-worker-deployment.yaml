@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.fullname" . }}-platform-worker
+  labels:
+    app.kubernetes.io/name: platform-worker
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.platformWorker.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: platform-worker
+          image: "{{ .Values.image.registry }}/{{ .Values.platformWorker.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "platform.fullname" . }}-config
+            - secretRef:
+                name: {{ include "platform.secretName" . }}
+          resources:
+            {{- toYaml .Values.platformWorker.resources | nindent 12 }}

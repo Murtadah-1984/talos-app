@@ -1,0 +1,123 @@
+name: talos-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform
+      POSTGRES_DB: platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: platform
+      RABBITMQ_DEFAULT_PASS: platform
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./docker/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    depends_on:
+      - jaeger
+
+  platform-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.platform-api
+    environment:
+      PLATFORM_ENV: development
+      PLATFORM_HTTP_ADDR: ":8080"
+      PLATFORM_POSTGRES_DSN: "postgres://platform:platform@postgres:5432/platform?sslmode=disable"
+      PLATFORM_REDIS_ADDR: "redis:6379"
+      PLATFORM_RABBITMQ_URL: "amqp://platform:platform@rabbitmq:5672/"
+      PLATFORM_OTLP_ENDPOINT: "otel-collector:4317"
+      PLATFORM_AUTH_MODE: dev
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  platform-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.platform-worker
+    environment:
+      PLATFORM_ENV: development
+      PLATFORM_POSTGRES_DSN: "postgres://platform:platform@postgres:5432/platform?sslmode=disable"
+      PLATFORM_REDIS_ADDR: "redis:6379"
+      PLATFORM_RABBITMQ_URL: "amqp://platform:platform@rabbitmq:5672/"
+      PLATFORM_OTLP_ENDPOINT: "otel-collector:4317"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  platform-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.platform-scheduler
+    environment:
+      PLATFORM_ENV: development
+      PLATFORM_POSTGRES_DSN: "postgres://platform:platform@postgres:5432/platform?sslmode=disable"
+      PLATFORM_OTLP_ENDPOINT: "otel-collector:4317"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_BASE_URL: "http://localhost:8080"
+    ports:
+      - "3000:80"
+    depends_on:
+      - platform-api
+
+volumes:
+  postgres-data:

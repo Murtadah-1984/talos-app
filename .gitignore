@@ -1,0 +1,19 @@
+# Go build artifacts
+/bin/
+*.exe
+*.test
+*.out
+
+# Local env/secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+
+# Helm packaged charts
+deploy/helm/**/*.tgz

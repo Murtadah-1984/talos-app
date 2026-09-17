@@ -1,0 +1,78 @@
+# Default values for the talos-platform chart. Nothing here is a real
+# credential — see the platform.existingSecret note before deploying to
+# production (§25, §47: no hardcoded credentials).
+
+image:
+  registry: ghcr.io/talos-platform
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+platformApi:
+  replicaCount: 2
+  image:
+    repository: platform-api
+  service:
+    port: 8080
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+platformWorker:
+  replicaCount: 2
+  image:
+    repository: platform-worker
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 1000m, memory: 512Mi }
+
+platformScheduler:
+  replicaCount: 1
+  image:
+    repository: platform-scheduler
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+platformWeb:
+  replicaCount: 2
+  image:
+    repository: platform-web
+  service:
+    port: 80
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+
+ingress:
+  enabled: false
+  className: ""
+  apiHost: api.talos-platform.example.com
+  webHost: app.talos-platform.example.com
+  annotations: {}
+  tls: []
+
+# Non-secret configuration, rendered into a ConfigMap and consumed by all
+# three backend components.
+config:
+  env: production
+  authMode: oidc
+  talosAdapter: mock
+  githubAdapter: mock
+  argocdAdapter: mock
+  clusterapiAdapter: mock
+  proxmoxAdapter: mock
+  secretStoreBackend: vault
+  tracingEnabled: true
+  otlpEndpoint: "otel-collector:4317"
+
+# Secret values. Set these via --set or, preferably, an existing Secret
+# referenced through existingSecret so credentials never touch `helm
+# history`/values files (§25).
+secrets:
+  existingSecret: "" # if set, overrides the values below entirely
+  postgresDSN: ""
+  redisAddr: ""
+  rabbitmqURL: ""
+  authDevSigningKey: ""
+  oidcIssuer: ""
+  oidcClientID: ""

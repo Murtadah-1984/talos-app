@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS alerts;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS operations;
+DROP TABLE IF EXISTS workflow_steps;
+DROP TABLE IF EXISTS workflows;

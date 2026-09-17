@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.fullname" . }}-platform-scheduler
+  labels:
+    app.kubernetes.io/name: platform-scheduler
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  # Never scale this beyond 1 without adding leader election: the scheduler's
+  # periodic reconciliation pass is not yet designed for concurrent runners.
+  replicas: {{ .Values.platformScheduler.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-scheduler
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-scheduler
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: platform-scheduler
+          image: "{{ .Values.image.registry }}/{{ .Values.platformScheduler.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "platform.fullname" . }}-config
+            - secretRef:
+                name: {{ include "platform.secretName" . }}
+          resources:
+            {{- toYaml .Values.platformScheduler.resources | nindent 12 }}
