@@ -119,6 +119,16 @@ func renderManifestSet(ctx context.Context, deps ClusterProvisionDeps, c *cluste
 	return files, nil
 }
 
+// filePaths extracts just the paths from a FileChange set, for recording on
+// a ChangeSet (§20) without duplicating file contents in the database.
+func filePaths(files []ports.FileChange) []string {
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	return paths
+}
+
 // latestChangeSet returns the most recently created change set for
 // clusterID, standing in for "the change set this provisioning run just
 // created" until the workflow engine threads step outputs forward.
@@ -261,6 +271,16 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				if err != nil {
 					return nil, fmt.Errorf("committing manifests: %w", err)
 				}
+				changeset := &gitops.ChangeSet{
+					ClusterID:      c.ID,
+					Description:    fmt.Sprintf("Provision cluster %s", c.Name),
+					GeneratedFiles: filePaths(files),
+					CommitSHA:      result.SHA,
+					Status:         gitops.ChangeSetCommitted,
+				}
+				if err := deps.GitOps.CreateChangeSet(ctx, changeset); err != nil {
+					return nil, fmt.Errorf("recording change set: %w", err)
+				}
 				return map[string]any{"branch": branch, "sha": result.SHA, "filesCommitted": len(files)}, nil
 			}),
 			step("create-pull-request", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
@@ -277,13 +297,13 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				if err != nil {
 					return nil, fmt.Errorf("creating pull request: %w", err)
 				}
-				changeset := &gitops.ChangeSet{
-					ClusterID:      c.ID,
-					Description:    fmt.Sprintf("Provision cluster %s", c.Name),
-					PullRequestURL: pr.URL,
-					Status:         gitops.ChangeSetPRCreated,
+				changeset, err := latestChangeSet(ctx, deps, c.ID)
+				if err != nil {
+					return nil, err
 				}
-				if err := deps.GitOps.CreateChangeSet(ctx, changeset); err != nil {
+				changeset.PullRequestURL = pr.URL
+				changeset.Status = gitops.ChangeSetPRCreated
+				if err := deps.GitOps.UpdateChangeSet(ctx, changeset); err != nil {
 					return nil, fmt.Errorf("recording change set: %w", err)
 				}
 				return map[string]any{"pullRequestURL": pr.URL, "pullRequestNumber": pr.Number}, nil

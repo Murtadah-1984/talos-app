@@ -183,6 +183,9 @@ func Load() (Config, error) {
 	if cfg.Auth.Mode != "dev" && cfg.Auth.Mode != "oidc" {
 		return Config{}, fmt.Errorf("invalid PLATFORM_AUTH_MODE %q: must be \"dev\" or \"oidc\"", cfg.Auth.Mode)
 	}
+	if cfg.Auth.Mode == "oidc" && (cfg.Auth.OIDCIssuer == "" || cfg.Auth.OIDCClientID == "") {
+		return Config{}, fmt.Errorf("PLATFORM_AUTH_MODE=oidc requires PLATFORM_OIDC_ISSUER and PLATFORM_OIDC_CLIENT_ID")
+	}
 	if cfg.TalosAdapterMode != "mock" && cfg.TalosAdapterMode != "real" {
 		return Config{}, fmt.Errorf("invalid PLATFORM_TALOS_ADAPTER %q: must be \"mock\" or \"real\"", cfg.TalosAdapterMode)
 	}

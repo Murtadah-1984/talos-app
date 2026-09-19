@@ -9,8 +9,10 @@ package github
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	ghapi "github.com/google/go-github/v75/github"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
@@ -25,7 +27,8 @@ type Client struct {
 // NewClient builds a Client authenticated with token (a PAT or installation
 // token). The token never leaves this package's calls to the GitHub API.
 func NewClient(token string) *Client {
-	return &Client{gh: ghapi.NewClient(nil).WithAuthToken(token)}
+	httpClient := &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
+	return &Client{gh: ghapi.NewClient(httpClient).WithAuthToken(token)}
 }
 
 // LoadClientFromSecretStore resolves a GitHub token from the platform's
@@ -69,6 +72,17 @@ func (c *Client) GetFile(ctx context.Context, owner, repo, ref, path string) ([]
 		return nil, fmt.Errorf("decoding file content: %w", err)
 	}
 	return []byte(content), nil
+}
+
+func (c *Client) GetCommitParent(ctx context.Context, owner, repo, sha string) (string, error) {
+	commit, _, err := c.gh.Repositories.GetCommit(ctx, owner, repo, sha, nil)
+	if err != nil {
+		return "", fmt.Errorf("getting commit %s: %w", sha, err)
+	}
+	if len(commit.Parents) == 0 {
+		return "", fmt.Errorf("%w: commit %s has no parent", shared.ErrNotFound, sha)
+	}
+	return commit.Parents[0].GetSHA(), nil
 }
 
 // Commit creates one atomic commit covering every file in req.Files via the

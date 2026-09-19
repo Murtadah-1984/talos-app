@@ -1,0 +1,66 @@
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "platform.fullname" . }}-backups
+  labels:
+    app.kubernetes.io/name: platform-postgres-backup
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.backup.persistence.storageClassName }}
+  storageClassName: {{ .Values.backup.persistence.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "platform.fullname" . }}-postgres-backup
+  labels:
+    app.kubernetes.io/name: platform-postgres-backup
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: platform-postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: "{{ .Values.backup.image.repository }}:{{ .Values.backup.image.tag }}"
+              envFrom:
+                - secretRef:
+                    name: {{ include "platform.secretName" . }}
+              # Mirrors scripts/backup-postgres.sh; kept inline rather than
+              # shared because this runs in a plain postgres image (for
+              # pg_dump), not the platform-api image the shell script
+              # otherwise assumes local tooling on.
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  out="/backups/platform-$(date -u +%Y%m%dT%H%M%SZ).dump"
+                  echo "Backing up to ${out}"
+                  pg_dump --dbname="${PLATFORM_POSTGRES_DSN}" --format=custom --compress=9 --file="${out}"
+                  find /backups -name 'platform-*.dump' -mtime +{{ .Values.backup.retentionDays }} -delete
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "platform.fullname" . }}-backups
+{{- end }}

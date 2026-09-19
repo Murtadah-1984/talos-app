@@ -204,6 +204,20 @@ func mountClusters(r chi.Router, d Deps) {
 			writeJSON(w, http.StatusOK, status)
 		})
 
+		sub.Get("/{id}/gitops/applicationsets", func(w http.ResponseWriter, r *http.Request) {
+			id, err := shared.ParseID(chi.URLParam(r, "id"))
+			if err != nil {
+				writeError(w, shared.ErrInvalidInput)
+				return
+			}
+			sets, err := d.ClusterService.ListApplicationSets(r.Context(), id)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, sets)
+		})
+
 		sub.Post("/{id}/sync", func(w http.ResponseWriter, r *http.Request) {
 			id, err := shared.ParseID(chi.URLParam(r, "id"))
 			if err != nil {
@@ -222,6 +236,31 @@ func mountClusters(r chi.Router, d Deps) {
 				return
 			}
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "sync triggered"})
+		})
+
+		sub.Post("/{id}/changesets/{changeSetId}/rollback", func(w http.ResponseWriter, r *http.Request) {
+			id, err := shared.ParseID(chi.URLParam(r, "id"))
+			if err != nil {
+				writeError(w, shared.ErrInvalidInput)
+				return
+			}
+			changeSetID, err := shared.ParseID(chi.URLParam(r, "changeSetId"))
+			if err != nil {
+				writeError(w, shared.ErrInvalidInput)
+				return
+			}
+			u, err := requireRoleAudited(r, d, user.ResourceCluster, id, user.RoleOperator, "cluster.rollback", "changeset", changeSetID.String())
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			revert, rollbackErr := d.ClusterService.Rollback(r.Context(), id, changeSetID)
+			recordAudit(r.Context(), d, r, u, "cluster.rollback", "changeset", changeSetID.String(), auditResult(rollbackErr), errString(rollbackErr))
+			if rollbackErr != nil {
+				writeError(w, rollbackErr)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, revert)
 		})
 	})
 }

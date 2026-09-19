@@ -76,8 +76,12 @@ func main() {
 		issuer = auth.NewDevIdentityProvider(cfg.Auth.DevSigningKey)
 		identityProvider = issuer
 	} else {
-		logger.Error("PLATFORM_AUTH_MODE=oidc is not yet implemented (see docs/roadmap.md)", "mode", cfg.Auth.Mode)
-		os.Exit(1)
+		oidcProvider, err := auth.NewOIDCIdentityProvider(ctx, cfg.Auth.OIDCIssuer, cfg.Auth.OIDCClientID)
+		if err != nil {
+			logger.Error("constructing OIDC identity provider", "error", err)
+			os.Exit(1)
+		}
+		identityProvider = oidcProvider
 	}
 
 	organizations := postgres.NewOrganizationRepository(pool)
@@ -156,8 +160,16 @@ func main() {
 	}
 	defer engine.Stop()
 
-	authSvc := authservice.New(users, issuer)
-	clusterSvc := clusterservice.New(clusters, gitopsRepo, engine, argoClient)
+	// issuer is a nil *auth.DevIdentityProvider in OIDC mode; passed directly
+	// as authservice.TokenIssuer it would box into a non-nil interface
+	// holding a nil pointer, defeating authservice's own "issuer == nil"
+	// check and panicking on first DevLogin call. Only box it when set.
+	var tokenIssuer authservice.TokenIssuer
+	if issuer != nil {
+		tokenIssuer = issuer
+	}
+	authSvc := authservice.New(users, tokenIssuer)
+	clusterSvc := clusterservice.New(clusters, gitopsRepo, engine, argoClient, gitProvider)
 	machineSvc := machineservice.New(machines, operations, talosClient, infraProviders, infraRegistry)
 
 	metrics := observability.NewMetrics()

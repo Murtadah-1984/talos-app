@@ -142,3 +142,46 @@ func TestClient_ListApplications_FiltersByProject(t *testing.T) {
 		t.Errorf("unexpected applications list: %+v", apps)
 	}
 }
+
+const testApplicationSetJSON = `{
+	"metadata": {"name": "clusters-appset", "namespace": "argocd"},
+	"status": {
+		"resources": [{"name": "basra-prod"}, {"name": "basra-staging"}],
+		"conditions": [{"type": "ResourcesUpToDate", "status": "True", "message": "up to date"}]
+	}
+}`
+
+func TestClient_ListApplicationSets(t *testing.T) {
+	var gotPath, gotQuery string
+	client, closeFn := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[` + testApplicationSetJSON + `]}`))
+	})
+	defer closeFn()
+
+	sets, err := client.ListApplicationSets(t.Context(), "default")
+	if err != nil {
+		t.Fatalf("ListApplicationSets: %v", err)
+	}
+	if gotPath != "/api/v1/applicationsets" {
+		t.Errorf("unexpected request path %q", gotPath)
+	}
+	if !strings.Contains(gotQuery, "projects=default") {
+		t.Errorf("expected project filter in query, got %q", gotQuery)
+	}
+	if len(sets) != 1 {
+		t.Fatalf("expected 1 application set, got %d", len(sets))
+	}
+	got := sets[0]
+	if got.Name != "clusters-appset" || got.Namespace != "argocd" {
+		t.Errorf("unexpected identity fields: %+v", got)
+	}
+	if len(got.Resources) != 2 || got.Resources[0] != "basra-prod" || got.Resources[1] != "basra-staging" {
+		t.Errorf("unexpected generated resources: %+v", got.Resources)
+	}
+	if len(got.Conditions) != 1 || got.Conditions[0].Type != "ResourcesUpToDate" || got.Conditions[0].Status != "True" {
+		t.Errorf("unexpected conditions: %+v", got.Conditions)
+	}
+}

@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
 )
@@ -55,7 +57,7 @@ func NewClient(baseURL, node, apiToken string, templateVMID int) *Client {
 		node:         node,
 		apiToken:     apiToken,
 		templateVMID: templateVMID,
-		http:         &http.Client{Timeout: 30 * time.Second},
+		http:         &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
 

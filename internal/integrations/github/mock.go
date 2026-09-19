@@ -18,6 +18,7 @@ import (
 type MockProvider struct {
 	mu       sync.Mutex
 	branches map[string]string // "owner/repo/branch" -> latest SHA
+	parents  map[string]string // commit SHA -> its parent's SHA
 	prs      map[string]*ports.PullRequest
 	nextPR   int
 	shaSeq   int
@@ -26,6 +27,7 @@ type MockProvider struct {
 func NewMockProvider() *MockProvider {
 	return &MockProvider{
 		branches: make(map[string]string),
+		parents:  make(map[string]string),
 		prs:      make(map[string]*ports.PullRequest),
 		nextPR:   1,
 	}
@@ -47,10 +49,25 @@ func (p *MockProvider) GetFile(_ context.Context, owner, repo, ref, path string)
 func (p *MockProvider) Commit(_ context.Context, req ports.CommitRequest) (ports.CommitResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	branchKey := key(req.Owner, req.Repo, req.Branch)
+	parent := p.branches[branchKey]
 	p.shaSeq++
 	sha := fmt.Sprintf("mock-sha-%d", p.shaSeq)
-	p.branches[key(req.Owner, req.Repo, req.Branch)] = sha
+	if parent != "" {
+		p.parents[sha] = parent
+	}
+	p.branches[branchKey] = sha
 	return ports.CommitResult{SHA: sha}, nil
+}
+
+func (p *MockProvider) GetCommitParent(_ context.Context, _, _, sha string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	parent, ok := p.parents[sha]
+	if !ok {
+		return "", fmt.Errorf("%w: mock commit %s has no recorded parent", shared.ErrNotFound, sha)
+	}
+	return parent, nil
 }
 
 func (p *MockProvider) CreatePullRequest(_ context.Context, req ports.PullRequestRequest) (ports.PullRequest, error) {

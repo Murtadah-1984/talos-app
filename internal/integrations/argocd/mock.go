@@ -14,12 +14,20 @@ import (
 )
 
 type MockClient struct {
-	mu   sync.Mutex
-	apps map[string]*ports.ApplicationStatus
+	mu      sync.Mutex
+	apps    map[string]*ports.ApplicationStatus
+	appSets map[string]*ports.ApplicationSetStatus
 }
 
 func NewMockClient() *MockClient {
-	return &MockClient{apps: make(map[string]*ports.ApplicationStatus)}
+	return &MockClient{apps: make(map[string]*ports.ApplicationStatus), appSets: make(map[string]*ports.ApplicationSetStatus)}
+}
+
+// SeedApplicationSet registers an ApplicationSet the mock will report on.
+func (c *MockClient) SeedApplicationSet(name, namespace string, resources []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.appSets[name] = &ports.ApplicationSetStatus{Name: name, Namespace: namespace, Resources: resources}
 }
 
 // Seed registers (or updates) an Application the mock will report on —
@@ -92,6 +100,16 @@ func (c *MockClient) GetHistory(_ context.Context, name string) ([]ports.SyncHis
 		return nil, shared.ErrNotFound
 	}
 	return []ports.SyncHistoryEntry{{Revision: a.Revision, DeployedAt: time.Now().Format(time.RFC3339), Status: "Succeeded"}}, nil
+}
+
+func (c *MockClient) ListApplicationSets(_ context.Context, _ string) ([]ports.ApplicationSetStatus, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]ports.ApplicationSetStatus, 0, len(c.appSets))
+	for _, a := range c.appSets {
+		out = append(out, *a)
+	}
+	return out, nil
 }
 
 func (c *MockClient) Capability() shared.CapabilityState {

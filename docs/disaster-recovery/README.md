@@ -23,9 +23,17 @@ database exists.
 
 ## Backing up PostgreSQL
 
-Run [`scripts/backup-postgres.sh`](../../scripts/backup-postgres.sh) on a schedule
-(cron, a Kubernetes CronJob, or your managed-Postgres provider's snapshot mechanism)
-against `PLATFORM_POSTGRES_DSN`. It produces a timestamped, compressed
+The Helm chart deploys a `CronJob` (`deploy/helm/platform/templates/platform-backup-cronjob.yaml`,
+enabled by default via `backup.enabled`) that runs `pg_dump` on a schedule
+(`backup.schedule`, default daily at 02:00) into a PVC, pruning archives older than
+`backup.retentionDays` (default 14). That PVC only protects against database-level
+mistakes on the same cluster — for real disaster recovery, also replicate its contents
+off-cluster (volume snapshots, an object-storage sync sidecar, etc.), which the chart
+does not do for you.
+
+For manual/ad hoc backups, or environments not using the Helm chart, run
+[`scripts/backup-postgres.sh`](../../scripts/backup-postgres.sh) directly against
+`PLATFORM_POSTGRES_DSN`. It produces the same kind of timestamped, compressed
 `pg_dump --format=custom` archive:
 
 ```bash

@@ -159,17 +159,17 @@ func (r *GitOpsRepository) CreateChangeSet(ctx context.Context, c *gitops.Change
 		return err
 	}
 	_, err = r.pool.Exec(ctx,
-		`INSERT INTO gitops_changesets (id, cluster_id, workflow_id, description, generated_files, pull_request_url, status, result, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		c.ID, c.ClusterID, c.WorkflowID, c.Description, filesJSON, c.PullRequestURL, c.Status, c.Result, c.CreatedAt, c.UpdatedAt)
+		`INSERT INTO gitops_changesets (id, cluster_id, workflow_id, description, generated_files, commit_sha, pull_request_url, status, result, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		c.ID, c.ClusterID, c.WorkflowID, c.Description, filesJSON, c.CommitSHA, c.PullRequestURL, c.Status, c.Result, c.CreatedAt, c.UpdatedAt)
 	return err
 }
 
 func (r *GitOpsRepository) UpdateChangeSet(ctx context.Context, c *gitops.ChangeSet) error {
 	c.Touch()
 	tag, err := r.pool.Exec(ctx,
-		`UPDATE gitops_changesets SET pull_request_url=$2, status=$3, result=$4, updated_at=$5 WHERE id=$1`,
-		c.ID, c.PullRequestURL, c.Status, c.Result, c.UpdatedAt)
+		`UPDATE gitops_changesets SET commit_sha=$2, pull_request_url=$3, status=$4, result=$5, updated_at=$6 WHERE id=$1`,
+		c.ID, c.CommitSHA, c.PullRequestURL, c.Status, c.Result, c.UpdatedAt)
 	if err != nil {
 		return err
 	}
@@ -179,9 +179,28 @@ func (r *GitOpsRepository) UpdateChangeSet(ctx context.Context, c *gitops.Change
 	return nil
 }
 
+func (r *GitOpsRepository) GetChangeSet(ctx context.Context, id shared.ID) (*gitops.ChangeSet, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT id, cluster_id, workflow_id, description, generated_files, commit_sha, pull_request_url, status, result, created_at, updated_at
+		 FROM gitops_changesets WHERE id = $1`, id)
+	c := &gitops.ChangeSet{}
+	var status string
+	var filesJSON []byte
+	err := row.Scan(&c.ID, &c.ClusterID, &c.WorkflowID, &c.Description, &filesJSON, &c.CommitSHA, &c.PullRequestURL, &status, &c.Result, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, shared.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scanning change set: %w", err)
+	}
+	c.Status = gitops.ChangeSetStatus(status)
+	_ = json.Unmarshal(filesJSON, &c.GeneratedFiles)
+	return c, nil
+}
+
 func (r *GitOpsRepository) ListChangeSetsForCluster(ctx context.Context, clusterID shared.ID, page shared.Page) ([]*gitops.ChangeSet, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, cluster_id, workflow_id, description, generated_files, pull_request_url, status, result, created_at, updated_at
+		`SELECT id, cluster_id, workflow_id, description, generated_files, commit_sha, pull_request_url, status, result, created_at, updated_at
 		 FROM gitops_changesets WHERE cluster_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
 		clusterID, page.Limit, page.Offset)
 	if err != nil {
@@ -193,7 +212,7 @@ func (r *GitOpsRepository) ListChangeSetsForCluster(ctx context.Context, cluster
 		c := &gitops.ChangeSet{}
 		var status string
 		var filesJSON []byte
-		if err := rows.Scan(&c.ID, &c.ClusterID, &c.WorkflowID, &c.Description, &filesJSON, &c.PullRequestURL, &status, &c.Result, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.ClusterID, &c.WorkflowID, &c.Description, &filesJSON, &c.CommitSHA, &c.PullRequestURL, &status, &c.Result, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		c.Status = gitops.ChangeSetStatus(status)

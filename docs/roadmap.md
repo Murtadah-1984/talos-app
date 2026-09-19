@@ -221,6 +221,53 @@ testable — no phase depends on unfinished work from a later phase to run.
       them on a schedule yet; that's a deployment-level concern (cron/CronJob) left to
       the operator for now.
 
+## Phase 8 — Closing the gaps
+
+Every remaining "still open" item carried forward from Phases 1-7, in one place. This
+phase has no new subsystem of its own — it's aimed at eliminating every documented
+limitation so the mock-vs-real story is complete everywhere.
+
+- [x] Real OIDC identity provider (`PLATFORM_AUTH_MODE=oidc`) — `internal/auth/oidc.go`
+      verifies bearer ID tokens via OIDC discovery + JWKS
+      (`github.com/coreos/go-oidc/v3`), configured with `PLATFORM_OIDC_ISSUER` /
+      `PLATFORM_OIDC_CLIENT_ID`.
+- [x] Automated (scheduled) database backups — a Helm `CronJob`
+      (`deploy/helm/platform/templates/platform-backup-cronjob.yaml`) runs `pg_dump`
+      into a PVC on a schedule (`backup.schedule`), pruning by `backup.retentionDays`.
+      Off-cluster replication of that PVC is still an operator responsibility.
+- [x] Per-integration OTel client spans (Talos/GitHub/ArgoCD/ClusterAPI/Proxmox) —
+      transport-level instrumentation: `otelhttp.NewTransport` on the ArgoCD, Proxmox,
+      and GitHub (`go-github`) HTTP clients; `otelgrpc.NewClientHandler` as a gRPC
+      stats handler on the Talos client's dial; `rest.Config.WrapTransport` on the
+      Cluster API dynamic client. One span per real backend call, with no changes
+      needed to each method's business logic.
+- [ ] OpenTelemetry metrics/logs export — correlate the existing Prometheus metrics
+      and structured logs with trace IDs, and/or export OTel metrics alongside traces.
+- [x] Argo CD **ApplicationSet discovery** — `ArgoCDClient.ListApplicationSets`
+      (`internal/integrations/argocd/client.go`), exposed as a live passthrough (not a
+      cached domain entity, unlike individual Applications) at
+      `GET /api/v1/clusters/{id}/gitops/applicationsets`.
+- [x] Argo CD **rollback via Git revert** (§18, §20) —
+      `clusterservice.Service.Rollback` (`internal/application/clusterservice/service.go`),
+      exposed as `POST /api/v1/clusters/{id}/changesets/{changeSetId}/rollback`. Required
+      persisting the commit SHA on `gitops.ChangeSet` (migration 0007) and a new
+      `GitProvider.GetCommitParent` port method. Reverts only the file changes a change
+      set made — not side effects a workflow step took outside Git (e.g. a direct Talos
+      call in `DIRECT_TALOS` mode).
+- [ ] **GitOps repository scaffolding generator** — bootstrapping a brand-new `gitops/`
+      repository layout for a tenant that doesn't have one yet.
+- [ ] **Webhook-driven human-in-the-loop approval gate** (§4) — currently polling-based.
+- [ ] Cluster API **remediation** (observing CAPI's own MachineHealthCheck-driven
+      replacement, not initiating it).
+- [ ] Cluster API **provider-specific infrastructure CRs** (the `infrastructureRef` a
+      real CAPI cluster needs — AWSCluster/vSphereCluster/etc.).
+- [ ] Talos **machine discovery** (enumerating not-yet-known machines) and **cluster
+      discovery** (inferring an existing cluster's topology in `DIRECT_TALOS` mode).
+- [ ] Talos **maintenance-mode (insecure, pre-PKI) connections** for freshly-booted,
+      not-yet-joined nodes.
+- [ ] Talos `Client` construction from more than a single talosconfig (multi-cluster
+      credential handling).
+
 ## Non-goals (always)
 
 - Replacing Argo CD's reconciliation loop

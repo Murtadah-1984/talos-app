@@ -10,6 +10,7 @@ package clusterservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/talos-platform/talos-platform/internal/application/ports"
@@ -31,10 +32,11 @@ type Service struct {
 	gitops    gitops.Repositories
 	workflows WorkflowEnqueuer
 	argocd    ports.ArgoCDClient
+	git       ports.GitProvider
 }
 
-func New(clusters cluster.Repository, gitopsRepo gitops.Repositories, workflows WorkflowEnqueuer, argocd ports.ArgoCDClient) *Service {
-	return &Service{clusters: clusters, gitops: gitopsRepo, workflows: workflows, argocd: argocd}
+func New(clusters cluster.Repository, gitopsRepo gitops.Repositories, workflows WorkflowEnqueuer, argocd ports.ArgoCDClient, git ports.GitProvider) *Service {
+	return &Service{clusters: clusters, gitops: gitopsRepo, workflows: workflows, argocd: argocd, git: git}
 }
 
 // CreateInput is the payload for creating a new cluster in DRAFT state,
@@ -242,6 +244,22 @@ func (s *Service) GitOpsStatus(ctx context.Context, clusterID shared.ID) (*GitOp
 	return &GitOpsStatus{Applications: apps, ChangeSets: changes}, nil
 }
 
+// ListApplicationSets surfaces the live Argo CD ApplicationSets for the
+// cluster's project (§4, §15) — a live passthrough rather than a cached
+// domain entity, unlike GitOpsStatus's Applications/ChangeSets (see
+// docs/argocd/README.md).
+func (s *Service) ListApplicationSets(ctx context.Context, clusterID shared.ID) ([]ports.ApplicationSetStatus, error) {
+	c, err := s.clusters.Get(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	sets, err := s.argocd.ListApplicationSets(ctx, c.Spec.ArgoCD.Project)
+	if err != nil {
+		return nil, fmt.Errorf("listing argo application sets for cluster %s: %w", c.Name, err)
+	}
+	return sets, nil
+}
+
 // TriggerSync requests an immediate Argo CD sync for the cluster's
 // Application (§4 "trigger synchronization where appropriate"). This is an
 // imperative, operator-requested action, not a desired-state change — Argo
@@ -259,4 +277,122 @@ func (s *Service) TriggerSync(ctx context.Context, clusterID shared.ID) error {
 		return fmt.Errorf("triggering sync for cluster %s: %w", c.Name, err)
 	}
 	return nil
+}
+
+// Rollback reverts the effect of a previously committed change set via Git
+// revert (§18, §20): it resolves the change set's commit's parent tree,
+// re-commits GeneratedFiles at their prior content (or deletes them, if they
+// didn't exist before that change set), opens/merges a PR for the revert
+// exactly like a forward change, and triggers an Argo CD sync. Argo CD's own
+// "rollback" API is deliberately not used — reverting via Git keeps Git the
+// single source of truth (ADR-0004) instead of letting the cluster and Git
+// disagree about desired state.
+//
+// This can only undo a change set's *files*, not side effects a workflow
+// step may have taken outside Git (e.g. a direct Talos call in
+// DIRECT_TALOS mode) — those aren't Git-revertible by construction.
+func (s *Service) Rollback(ctx context.Context, clusterID, changeSetID shared.ID) (*gitops.ChangeSet, error) {
+	c, err := s.clusters.Get(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	target, err := s.gitops.GetChangeSet(ctx, changeSetID)
+	if err != nil {
+		return nil, fmt.Errorf("loading change set: %w", err)
+	}
+	if target.ClusterID != clusterID {
+		return nil, fmt.Errorf("%w: change set %s does not belong to cluster %s", shared.ErrInvalidInput, changeSetID, clusterID)
+	}
+	if target.CommitSHA == "" {
+		return nil, fmt.Errorf("%w: change set %s has no recorded commit to revert", shared.ErrInvalidInput, changeSetID)
+	}
+
+	cfg, err := s.gitops.GetGitOpsConfigurationForCluster(ctx, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("loading gitops configuration: %w", err)
+	}
+	repo, err := s.gitops.GetRepository(ctx, cfg.RepositoryID)
+	if err != nil {
+		return nil, fmt.Errorf("loading git repository: %w", err)
+	}
+
+	parentSHA, err := s.git.GetCommitParent(ctx, repo.Owner, repo.Name, target.CommitSHA)
+	if err != nil {
+		return nil, fmt.Errorf("resolving parent of commit %s: %w", target.CommitSHA, err)
+	}
+
+	files := make([]ports.FileChange, 0, len(target.GeneratedFiles))
+	for _, path := range target.GeneratedFiles {
+		content, err := s.git.GetFile(ctx, repo.Owner, repo.Name, parentSHA, path)
+		if errors.Is(err, shared.ErrNotFound) {
+			// The file didn't exist before this change set — reverting it
+			// means removing it, not restoring empty content.
+			files = append(files, ports.FileChange{Path: path, Delete: true})
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading prior content of %s: %w", path, err)
+		}
+		files = append(files, ports.FileChange{Path: path, Content: content})
+	}
+
+	branch := fmt.Sprintf("platform/cluster-%s-rollback-%s", c.Name, changeSetID.String()[:8])
+	description := fmt.Sprintf("Revert %q (change set %s)", target.Description, changeSetID)
+	if err := s.git.CreateBranch(ctx, repo.Owner, repo.Name, branch, repo.DefaultBranch); err != nil {
+		return nil, fmt.Errorf("creating rollback branch: %w", err)
+	}
+	result, err := s.git.Commit(ctx, ports.CommitRequest{
+		Owner: repo.Owner, Repo: repo.Name, Branch: branch, Message: description, Files: files,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("committing rollback: %w", err)
+	}
+
+	revert := &gitops.ChangeSet{
+		ClusterID:      clusterID,
+		Description:    description,
+		GeneratedFiles: target.GeneratedFiles,
+		CommitSHA:      result.SHA,
+		Status:         gitops.ChangeSetCommitted,
+	}
+	if err := s.gitops.CreateChangeSet(ctx, revert); err != nil {
+		return nil, fmt.Errorf("recording rollback change set: %w", err)
+	}
+
+	pr, err := s.git.CreatePullRequest(ctx, ports.PullRequestRequest{
+		Owner: repo.Owner, Repo: repo.Name, Title: description,
+		Body: "Rollback generated by the Talos Platform (§18).",
+		Head: branch, Base: repo.DefaultBranch,
+	})
+	if err != nil {
+		return revert, fmt.Errorf("creating rollback pull request: %w", err)
+	}
+	revert.PullRequestURL = pr.URL
+	revert.Status = gitops.ChangeSetPRCreated
+	if err := s.gitops.UpdateChangeSet(ctx, revert); err != nil {
+		return revert, fmt.Errorf("recording rollback pull request: %w", err)
+	}
+
+	// Same "not yet webhook-driven" simplification as every other change
+	// (see cluster_provision.go's await-and-merge-pull-request step).
+	if err := s.git.MergePullRequest(ctx, repo.Owner, repo.Name, pr.Number); err != nil {
+		return revert, fmt.Errorf("merging rollback pull request #%d: %w", pr.Number, err)
+	}
+	revert.Status = gitops.ChangeSetMerged
+	revert.Result = "merged"
+	if err := s.gitops.UpdateChangeSet(ctx, revert); err != nil {
+		return revert, fmt.Errorf("recording merged rollback: %w", err)
+	}
+
+	if c.Spec.ArgoCD.Enabled {
+		if err := s.argocd.Sync(ctx, c.Name); err != nil {
+			return revert, fmt.Errorf("syncing argocd application after rollback: %w", err)
+		}
+		revert.Status = gitops.ChangeSetSynced
+		if err := s.gitops.UpdateChangeSet(ctx, revert); err != nil {
+			return revert, fmt.Errorf("recording synced rollback: %w", err)
+		}
+	}
+
+	return revert, nil
 }

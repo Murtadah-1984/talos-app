@@ -46,10 +46,20 @@ func commitClusterAPIChange(ctx context.Context, deps ClusterProvisionDeps, c *c
 	if err := deps.Git.CreateBranch(ctx, repo.owner, repo.name, branch, repo.defaultBranch); err != nil {
 		return fmt.Errorf("creating branch: %w", err)
 	}
-	if _, err := deps.Git.Commit(ctx, ports.CommitRequest{
+	result, err := deps.Git.Commit(ctx, ports.CommitRequest{
 		Owner: repo.owner, Repo: repo.name, Branch: branch, Message: description, Files: files,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("committing manifests: %w", err)
+	}
+
+	changeset := &gitops.ChangeSet{
+		ClusterID: c.ID, Description: description,
+		GeneratedFiles: filePaths(files), CommitSHA: result.SHA,
+		Status: gitops.ChangeSetCommitted,
+	}
+	if err := deps.GitOps.CreateChangeSet(ctx, changeset); err != nil {
+		return fmt.Errorf("recording change set: %w", err)
 	}
 
 	pr, err := deps.Git.CreatePullRequest(ctx, ports.PullRequestRequest{
@@ -60,11 +70,9 @@ func commitClusterAPIChange(ctx context.Context, deps ClusterProvisionDeps, c *c
 	if err != nil {
 		return fmt.Errorf("creating pull request: %w", err)
 	}
-
-	changeset := &gitops.ChangeSet{
-		ClusterID: c.ID, Description: description, PullRequestURL: pr.URL, Status: gitops.ChangeSetPRCreated,
-	}
-	if err := deps.GitOps.CreateChangeSet(ctx, changeset); err != nil {
+	changeset.PullRequestURL = pr.URL
+	changeset.Status = gitops.ChangeSetPRCreated
+	if err := deps.GitOps.UpdateChangeSet(ctx, changeset); err != nil {
 		return fmt.Errorf("recording change set: %w", err)
 	}
 

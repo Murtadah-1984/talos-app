@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/gitops"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
@@ -35,7 +37,7 @@ func NewClient(baseURL, token string) *Client {
 	return &Client{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		token:   token,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http:    &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
 
@@ -162,6 +164,62 @@ func (c *Client) GetHistory(ctx context.Context, name string) ([]ports.SyncHisto
 	out := make([]ports.SyncHistoryEntry, 0, len(app.Status.History))
 	for _, h := range app.Status.History {
 		out = append(out, ports.SyncHistoryEntry{Revision: h.Revision, DeployedAt: h.DeployedAt, Status: app.Status.Sync.Status})
+	}
+	return out, nil
+}
+
+// argoApplicationSet mirrors the subset of Argo CD's ApplicationSet resource
+// this client reads.
+type argoApplicationSet struct {
+	Metadata struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"metadata"`
+	Status struct {
+		Resources []struct {
+			Name string `json:"name"`
+		} `json:"resources"`
+		Conditions []struct {
+			Type    string `json:"type"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		} `json:"conditions"`
+	} `json:"status"`
+}
+
+type argoApplicationSetList struct {
+	Items []argoApplicationSet `json:"items"`
+}
+
+func toApplicationSetStatus(a argoApplicationSet) ports.ApplicationSetStatus {
+	resources := make([]string, 0, len(a.Status.Resources))
+	for _, r := range a.Status.Resources {
+		resources = append(resources, r.Name)
+	}
+	conditions := make([]ports.ApplicationSetCondition, 0, len(a.Status.Conditions))
+	for _, cond := range a.Status.Conditions {
+		conditions = append(conditions, ports.ApplicationSetCondition{Type: cond.Type, Status: cond.Status, Message: cond.Message})
+	}
+	return ports.ApplicationSetStatus{
+		Name:       a.Metadata.Name,
+		Namespace:  a.Metadata.Namespace,
+		Resources:  resources,
+		Conditions: conditions,
+	}
+}
+
+func (c *Client) ListApplicationSets(ctx context.Context, project string) ([]ports.ApplicationSetStatus, error) {
+	path := "/api/v1/applicationsets"
+	if project != "" {
+		path += "?projects=" + project
+	}
+	var list argoApplicationSetList
+	if err := c.do(ctx, http.MethodGet, path, &list); err != nil {
+		return nil, fmt.Errorf("listing Argo CD application sets: %w", err)
+	}
+	out := make([]ports.ApplicationSetStatus, 0, len(list.Items))
+	for _, item := range list.Items {
+		out = append(out, toApplicationSetStatus(item))
 	}
 	return out, nil
 }

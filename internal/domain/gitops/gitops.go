@@ -68,6 +68,10 @@ type ChangeSet struct {
 	WorkflowID     *shared.ID
 	Description    string
 	GeneratedFiles []string
+	// CommitSHA is the Git commit this change set produced. Required to
+	// roll it back via Git revert (§18): reverting means resolving this
+	// commit's parent tree and re-committing GeneratedFiles' prior content.
+	CommitSHA      string
 	PullRequestURL string
 	Status         ChangeSetStatus
 	Result         string
@@ -125,6 +129,7 @@ type Repositories interface {
 
 	CreateChangeSet(ctx context.Context, c *ChangeSet) error
 	UpdateChangeSet(ctx context.Context, c *ChangeSet) error
+	GetChangeSet(ctx context.Context, id shared.ID) (*ChangeSet, error)
 	ListChangeSetsForCluster(ctx context.Context, clusterID shared.ID, page shared.Page) ([]*ChangeSet, error)
 
 	UpsertArgoApplication(ctx context.Context, a *ArgoApplication) error

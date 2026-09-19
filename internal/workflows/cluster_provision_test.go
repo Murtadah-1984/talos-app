@@ -175,6 +175,18 @@ func (f *fakeGitOpsRepo) UpdateChangeSet(_ context.Context, c *gitops.ChangeSet)
 	}
 	return nil
 }
+func (f *fakeGitOpsRepo) GetChangeSet(_ context.Context, id shared.ID) (*gitops.ChangeSet, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sets := range f.changeSets {
+		for _, existing := range sets {
+			if existing.ID == id {
+				return existing, nil
+			}
+		}
+	}
+	return nil, shared.ErrNotFound
+}
 func (f *fakeGitOpsRepo) ListChangeSetsForCluster(_ context.Context, clusterID shared.ID, page shared.Page) ([]*gitops.ChangeSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

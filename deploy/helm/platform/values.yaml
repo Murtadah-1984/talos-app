@@ -43,6 +43,25 @@ platformWeb:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 250m, memory: 128Mi }
 
+# Scheduled PostgreSQL backups (§33 disaster recovery, Phase 8). Writes
+# pg_dump custom-format archives to a PVC on a cron schedule and prunes ones
+# older than retentionDays. The PVC only protects against database-level
+# mistakes/corruption on the same cluster; for real disaster recovery, also
+# replicate this volume (or its contents) off-cluster.
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionDays: 14
+  image:
+    repository: postgres
+    tag: "16"
+  persistence:
+    size: 10Gi
+    storageClassName: ""
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
 ingress:
   enabled: false
   className: ""

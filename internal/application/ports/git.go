@@ -56,6 +56,11 @@ type GitProvider interface {
 	CreatePullRequest(ctx context.Context, req PullRequestRequest) (PullRequest, error)
 	GetPullRequest(ctx context.Context, owner, repo string, number int) (PullRequest, error)
 	MergePullRequest(ctx context.Context, owner, repo string, number int) error
+	// GetCommitParent returns the SHA of sha's first parent commit, needed
+	// to resolve the tree a change replaced when rolling it back via Git
+	// revert (§18, §20). Returns shared.ErrNotFound if sha has no parent
+	// (the repository's very first commit).
+	GetCommitParent(ctx context.Context, owner, repo, sha string) (string, error)
 
 	Capability() shared.CapabilityState
 }

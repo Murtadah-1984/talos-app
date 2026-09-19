@@ -27,7 +27,9 @@ package clusterapi
 import (
 	"context"
 	"fmt"
+	"net/http"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -51,6 +53,9 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading management cluster kubeconfig: %w", err)
+	}
+	cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+		return otelhttp.NewTransport(rt)
 	}
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {

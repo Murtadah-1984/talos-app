@@ -22,6 +22,8 @@ import (
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"google.golang.org/grpc"
 
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
@@ -58,7 +60,8 @@ func LoadClientFromSecretStore(ctx context.Context, store ports.SecretStore, ref
 }
 
 func (c *Client) dial(ctx context.Context, endpoint string) (*tclient.Client, error) {
-	cli, err := tclient.New(ctx, tclient.WithConfig(c.cfg), tclient.WithEndpoints(endpoint))
+	cli, err := tclient.New(ctx, tclient.WithConfig(c.cfg), tclient.WithEndpoints(endpoint),
+		tclient.WithGRPCDialOptions(grpc.WithStatsHandler(otelgrpc.NewClientHandler())))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to Talos endpoint %s: %w", endpoint, err)
 	}

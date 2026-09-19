@@ -12,8 +12,12 @@ implemented today vs. still open.
   and `machine_handlers.go`.
 - **Authentication**: pluggable `ports.IdentityProvider`. `PLATFORM_AUTH_MODE=dev` issues
   locally-signed HS256 tokens for local development only — **never set this in
-  production**. OIDC (Keycloak/Azure AD/GitHub) is the production path and is not yet
-  implemented (see [../roadmap.md](../roadmap.md) Phase 2+).
+  production**. `PLATFORM_AUTH_MODE=oidc` verifies bearer ID tokens from a real OIDC
+  provider (Keycloak, Azure AD/Entra ID, GitHub, etc.) via discovery + JWKS
+  (`internal/auth/oidc.go`), configured with `PLATFORM_OIDC_ISSUER` and
+  `PLATFORM_OIDC_CLIENT_ID`; this is the production path. The frontend completes the
+  login flow itself (authorization code + PKCE) and sends the resulting ID token as a
+  bearer credential — the platform never sees a password.
 - **Secrets at rest**: `internal/infrastructure/secrets` provides two `ports.SecretStore`
   backends selected via `PLATFORM_SECRET_STORE_BACKEND`:
   - `local` (default): AES-256-GCM, keyed by `PLATFORM_SECRET_STORE_KEY_HEX`. Development
