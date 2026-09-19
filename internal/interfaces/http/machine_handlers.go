@@ -60,12 +60,13 @@ func mountMachines(r chi.Router, d Deps) {
 				return
 			}
 			scopeKind, scopeID := machineClusterScope(r, d, id)
-			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleOperator)
+			u, err := requireRoleAudited(r, d, scopeKind, scopeID, user.RoleOperator, "machine.reboot", "machine", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			op, err := d.MachineService.Reboot(r.Context(), id, u.ID, idempotencyKey(r, "reboot-"+id.String()))
+			recordAudit(r.Context(), d, r, u, "machine.reboot", "machine", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -80,7 +81,7 @@ func mountMachines(r chi.Router, d Deps) {
 				return
 			}
 			scopeKind, scopeID := machineClusterScope(r, d, id)
-			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleClusterAdmin)
+			u, err := requireRoleAudited(r, d, scopeKind, scopeID, user.RoleClusterAdmin, "machine.upgrade", "machine", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
@@ -93,6 +94,7 @@ func mountMachines(r chi.Router, d Deps) {
 				return
 			}
 			op, err := d.MachineService.Upgrade(r.Context(), id, u.ID, idempotencyKey(r, "upgrade-"+id.String()), req.Image)
+			recordAudit(r.Context(), d, r, u, "machine.upgrade", "machine", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -111,12 +113,13 @@ func mountMachines(r chi.Router, d Deps) {
 				return
 			}
 			scopeKind, scopeID := machineClusterScope(r, d, id)
-			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleOperator)
+			u, err := requireRoleAudited(r, d, scopeKind, scopeID, user.RoleOperator, "machine.power_on", "machine", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			op, err := d.MachineService.HardPowerOn(r.Context(), id, u.ID, idempotencyKey(r, "power-on-"+id.String()))
+			recordAudit(r.Context(), d, r, u, "machine.power_on", "machine", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -131,12 +134,13 @@ func mountMachines(r chi.Router, d Deps) {
 				return
 			}
 			scopeKind, scopeID := machineClusterScope(r, d, id)
-			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleClusterAdmin)
+			u, err := requireRoleAudited(r, d, scopeKind, scopeID, user.RoleClusterAdmin, "machine.power_off", "machine", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			op, err := d.MachineService.HardPowerOff(r.Context(), id, u.ID, idempotencyKey(r, "power-off-"+id.String()))
+			recordAudit(r.Context(), d, r, u, "machine.power_off", "machine", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -151,12 +155,13 @@ func mountMachines(r chi.Router, d Deps) {
 				return
 			}
 			scopeKind, scopeID := machineClusterScope(r, d, id)
-			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleClusterAdmin)
+			u, err := requireRoleAudited(r, d, scopeKind, scopeID, user.RoleClusterAdmin, "machine.power_cycle", "machine", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			op, err := d.MachineService.HardPowerCycle(r.Context(), id, u.ID, idempotencyKey(r, "power-cycle-"+id.String()))
+			recordAudit(r.Context(), d, r, u, "machine.power_cycle", "machine", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return

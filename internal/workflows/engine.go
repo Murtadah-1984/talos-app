@@ -12,10 +12,15 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/audit"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
 	"github.com/talos-platform/talos-platform/internal/domain/workflow"
+	"github.com/talos-platform/talos-platform/internal/observability"
 )
 
 // StepFunc executes one workflow step. It receives the parent workflow (for
@@ -45,6 +50,7 @@ type Engine struct {
 	audit       audit.Repository
 	registry    map[workflow.Type]Definition
 	unsubscribe func()
+	tracer      trace.Tracer
 }
 
 func NewEngine(repo workflow.Repository, broker ports.Broker, auditRepo audit.Repository) *Engine {
@@ -53,6 +59,7 @@ func NewEngine(repo workflow.Repository, broker ports.Broker, auditRepo audit.Re
 		broker:   broker,
 		audit:    auditRepo,
 		registry: make(map[workflow.Type]Definition),
+		tracer:   observability.Tracer("workflow-engine"),
 	}
 }
 
@@ -182,15 +189,25 @@ func (e *Engine) executeNext(ctx context.Context, workflowID shared.ID) error {
 		return e.finish(ctx, wf, workflow.StatusFailed, fmt.Sprintf("no step definition at sequence %d for type %s", step.Sequence, wf.Type))
 	}
 
-	output, runErr := def.Steps[step.Sequence].Run(ctx, wf)
+	stepCtx, span := e.tracer.Start(ctx, "workflow.step", trace.WithAttributes(
+		attribute.String("workflow.type", string(wf.Type)),
+		attribute.String("workflow.id", wf.ID.String()),
+		attribute.String("workflow.step", step.Name),
+		attribute.Int("workflow.step_sequence", step.Sequence),
+	))
+	output, runErr := def.Steps[step.Sequence].Run(stepCtx, wf)
 	now := time.Now().UTC()
 	step.FinishedAt = &now
 	if runErr != nil {
+		span.SetStatus(codes.Error, runErr.Error())
+		span.RecordError(runErr)
+		span.End()
 		step.Status = workflow.StatusFailed
 		step.Error = runErr.Error()
 		_ = e.repo.UpdateStep(ctx, step)
 		return e.finish(ctx, wf, workflow.StatusNeedsAttention, fmt.Sprintf("step %q failed: %v", step.Name, runErr))
 	}
+	span.End()
 
 	step.Status = workflow.StatusSucceeded
 	step.Output = output

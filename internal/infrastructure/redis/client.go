@@ -82,4 +82,26 @@ func (l *Lock) Unlock(ctx context.Context) error {
 	return l.client.rdb.Eval(ctx, script, []string{lockKey(l.key)}, l.token).Err()
 }
 
+// Renew extends the lock's TTL, but only if it's still held by this token —
+// the compare-and-extend counterpart to Unlock's compare-and-delete. Used
+// for long-lived leases (e.g. leader election, §22/Phase 7 HA) where the
+// holder periodically renews rather than acquiring once for a fixed
+// duration. Returns false (with a nil error) if the lease was lost — e.g.
+// this process stalled past the previous TTL and someone else acquired it —
+// so the caller can step down instead of assuming it's still the leader.
+func (l *Lock) Renew(ctx context.Context, ttl time.Duration) (bool, error) {
+	const script = `
+		if redis.call("get", KEYS[1]) == ARGV[1] then
+			return redis.call("pexpire", KEYS[1], ARGV[2])
+		end
+		return 0
+	`
+	result, err := l.client.rdb.Eval(ctx, script, []string{lockKey(l.key)}, l.token, ttl.Milliseconds()).Result()
+	if err != nil {
+		return false, fmt.Errorf("renewing lock %s: %w", l.key, err)
+	}
+	renewed, ok := result.(int64)
+	return ok && renewed == 1, nil
+}
+
 func lockKey(key string) string { return "lock:" + key }

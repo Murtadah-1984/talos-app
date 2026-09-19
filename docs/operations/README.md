@@ -42,6 +42,19 @@ go run ./cmd/talos-platform workflow get <workflow-id>
 or watch `GET /api/v1/workflows/{id}` from the UI's Workflows tab, which shows each
 step's status as it completes.
 
+## High availability
+
+- `platform-api` and `platform-worker` are stateless and safe to run at any replica
+  count behind a load balancer; workflow step execution is serialized via Postgres
+  `SELECT ... FOR UPDATE SKIP LOCKED` claims (ADR-0005), so multiple `platform-worker`
+  replicas share the load without double-executing a step.
+- `platform-scheduler` runs its periodic reconciliation pass only on the replica
+  holding a Redis-lease leader election (`internal/infrastructure/leaderelection`),
+  refreshed on a 45s TTL. It is now safe to run more than one replica: standbys skip
+  their reconciliation tick until they observe the lease expire, and failover is
+  automatic (no manual intervention) within one lease TTL of the leader disappearing.
+  This requires `PLATFORM_REDIS_ADDR` to point at a reachable Redis.
+
 ## When a workflow gets stuck
 
 A workflow that lands in `NEEDS_ATTENTION` stopped because a step failed — the

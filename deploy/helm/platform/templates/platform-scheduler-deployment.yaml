@@ -6,8 +6,10 @@ metadata:
     app.kubernetes.io/name: platform-scheduler
     {{- include "platform.labels" . | nindent 4 }}
 spec:
-  # Never scale this beyond 1 without adding leader election: the scheduler's
-  # periodic reconciliation pass is not yet designed for concurrent runners.
+  # Safe to run more than one replica: a Redis-lease-backed leader election
+  # (internal/infrastructure/leaderelection) ensures only one replica runs
+  # the reconciliation pass at a time (§22, Phase 7 HA); extra replicas are
+  # cheap standbys that take over within one lease TTL if the leader dies.
   replicas: {{ .Values.platformScheduler.replicaCount }}
   selector:
     matchLabels:

@@ -120,3 +120,34 @@ BMC credentials are per-machine, resolved from the SecretStore at call time (JSO
 from environment variables. See [../infrastructure/README.md](../infrastructure/README.md)
 for what the real clients do and the extension-point checklist for adding another
 provider (AWS/Azure/GCP/OpenStack/VMware/Equinix Metal).
+
+## Secrets: local vs. Vault
+
+By default (`PLATFORM_SECRET_STORE_BACKEND=local`, or unset) secrets are encrypted
+with AES-256-GCM using a key you provide — development only. For production, point at
+Vault:
+
+```bash
+export PLATFORM_SECRET_STORE_BACKEND=vault
+export PLATFORM_VAULT_ADDR=https://vault.example.com:8200
+export PLATFORM_VAULT_TOKEN=...
+export PLATFORM_VAULT_MOUNT_PATH=platform   # KV v2 mount; defaults to "secret" if unset
+```
+
+See [../security/README.md](../security/README.md) and
+[ADR-0006](../adr/0006-secrets-management.md).
+
+## CORS and rate limiting
+
+The API is same-origin-only and unrate-limited by default — fine for local development
+where the SPA and API share an origin behind one dev proxy. For a production deployment
+where the frontend is served from a different origin, or to protect against noisy/
+abusive clients:
+
+```bash
+export PLATFORM_CORS_ORIGINS=https://app.example.com,https://admin.example.com
+export PLATFORM_RATE_LIMIT_RPS=20     # requests/second per client IP; 0 disables
+export PLATFORM_RATE_LIMIT_BURST=40
+```
+
+See [../security/README.md](../security/README.md) for what these protect against.

@@ -53,6 +53,14 @@ type Deps struct {
 	Events *websocket.Hub
 
 	MetricsHandler http.Handler
+
+	// CORSOrigins are the web origins allowed to call this API cross-origin
+	// (§48); empty means same-origin only. RateLimitRPS/RateLimitBurst
+	// configure the per-client-IP rate limiter (§25); RateLimitRPS <= 0
+	// disables rate limiting entirely (e.g. for local development).
+	CORSOrigins    []string
+	RateLimitRPS   float64
+	RateLimitBurst int
 }
 
 // NewRouter builds the full chi router: middleware chain, health/readiness
@@ -64,6 +72,11 @@ func NewRouter(d Deps) *chi.Mux { //nolint:revive // deps struct is intentional
 	r.Use(chimw.Recoverer)
 	r.Use(appmiddleware.RequestID)
 	r.Use(appmiddleware.Logging(d.Logger))
+	r.Use(appmiddleware.SecurityHeaders)
+	r.Use(appmiddleware.CORS(d.CORSOrigins))
+	if d.RateLimitRPS > 0 {
+		r.Use(appmiddleware.RateLimit(d.RateLimitRPS, d.RateLimitBurst))
+	}
 
 	r.Get("/healthz", healthzHandler)
 	r.Get("/readyz", readyzHandler(d))

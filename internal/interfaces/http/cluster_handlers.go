@@ -58,12 +58,13 @@ func mountClusters(r chi.Router, d Deps) {
 				writeError(w, shared.ErrInvalidInput)
 				return
 			}
-			u, err := requireRole(r, d, user.ResourceCluster, id, user.RoleClusterAdmin)
+			u, err := requireRoleAudited(r, d, user.ResourceCluster, id, user.RoleClusterAdmin, "cluster.delete", "cluster", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			wf, err := d.ClusterService.Delete(r.Context(), id, u.ID, idempotencyKey(r, "delete-"+id.String()))
+			recordAudit(r.Context(), d, r, u, "cluster.delete", "cluster", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -91,12 +92,13 @@ func mountClusters(r chi.Router, d Deps) {
 				writeError(w, shared.ErrInvalidInput)
 				return
 			}
-			u, err := requireRole(r, d, user.ResourceCluster, id, user.RoleOperator)
+			u, err := requireRoleAudited(r, d, user.ResourceCluster, id, user.RoleOperator, "cluster.provision", "cluster", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			wf, err := d.ClusterService.Provision(r.Context(), id, u.ID, idempotencyKey(r, "provision-"+id.String()))
+			recordAudit(r.Context(), d, r, u, "cluster.provision", "cluster", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -110,7 +112,7 @@ func mountClusters(r chi.Router, d Deps) {
 				writeError(w, shared.ErrInvalidInput)
 				return
 			}
-			u, err := requireRole(r, d, user.ResourceCluster, id, user.RoleClusterAdmin)
+			u, err := requireRoleAudited(r, d, user.ResourceCluster, id, user.RoleClusterAdmin, "cluster.upgrade", "cluster", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
@@ -124,6 +126,7 @@ func mountClusters(r chi.Router, d Deps) {
 				return
 			}
 			wf, err := d.ClusterService.Upgrade(r.Context(), id, u.ID, idempotencyKey(r, "upgrade-"+id.String()), req.KubernetesVersion, req.TalosVersion)
+			recordAudit(r.Context(), d, r, u, "cluster.upgrade", "cluster", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -137,7 +140,7 @@ func mountClusters(r chi.Router, d Deps) {
 				writeError(w, shared.ErrInvalidInput)
 				return
 			}
-			u, err := requireRole(r, d, user.ResourceCluster, id, user.RoleOperator)
+			u, err := requireRoleAudited(r, d, user.ResourceCluster, id, user.RoleOperator, "cluster.scale", "cluster", id.String())
 			if err != nil {
 				writeError(w, err)
 				return
@@ -151,6 +154,7 @@ func mountClusters(r chi.Router, d Deps) {
 				return
 			}
 			wf, err := d.ClusterService.ScaleWorkers(r.Context(), id, u.ID, idempotencyKey(r, "scale-"+id.String()), req.Pool, req.Replicas)
+			recordAudit(r.Context(), d, r, u, "cluster.scale", "cluster", id.String(), auditResult(err), errString(err))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -206,12 +210,15 @@ func mountClusters(r chi.Router, d Deps) {
 				writeError(w, shared.ErrInvalidInput)
 				return
 			}
-			if _, err := requireRole(r, d, user.ResourceCluster, id, user.RoleOperator); err != nil {
+			u, err := requireRoleAudited(r, d, user.ResourceCluster, id, user.RoleOperator, "cluster.sync", "cluster", id.String())
+			if err != nil {
 				writeError(w, err)
 				return
 			}
-			if err := d.ClusterService.TriggerSync(r.Context(), id); err != nil {
-				writeError(w, err)
+			syncErr := d.ClusterService.TriggerSync(r.Context(), id)
+			recordAudit(r.Context(), d, r, u, "cluster.sync", "cluster", id.String(), auditResult(syncErr), errString(syncErr))
+			if syncErr != nil {
+				writeError(w, syncErr)
 				return
 			}
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "sync triggered"})

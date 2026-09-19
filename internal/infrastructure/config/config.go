@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,22 @@ type Config struct {
 
 	SecretStoreBackend string // "local" (dev, AES-GCM at rest) or "vault"
 	SecretStoreKeyHex  string // 32-byte hex key for the local backend
+
+	// Vault* configure the real SecretStore backend when SecretStoreBackend
+	// is "vault" (ADR-0006, Phase 7). VaultToken is a static token here as
+	// the simplest bootstrap; production deployments should prefer an
+	// AppRole or Kubernetes auth login instead of a long-lived static token.
+	VaultAddr  string
+	VaultToken string
+	VaultMount string
+
+	// CORSOrigins are the web origins the API accepts cross-origin requests
+	// from (§48); empty means same-origin only. RateLimitRPS/RateLimitBurst
+	// configure the per-client-IP rate limiter (§25); RateLimitRPS <= 0
+	// disables rate limiting.
+	CORSOrigins    []string
+	RateLimitRPS   float64
+	RateLimitBurst int
 }
 
 type PostgresConfig struct {
@@ -155,6 +172,12 @@ func Load() (Config, error) {
 		BareMetalRedfishEnabled:  getenvBool("PLATFORM_BAREMETAL_REDFISH_ENABLED", false),
 		SecretStoreBackend:       getenv("PLATFORM_SECRETSTORE_BACKEND", "local"),
 		SecretStoreKeyHex:        getenv("PLATFORM_SECRETSTORE_KEY_HEX", ""),
+		VaultAddr:                getenv("PLATFORM_VAULT_ADDR", ""),
+		VaultToken:               getenv("PLATFORM_VAULT_TOKEN", ""),
+		VaultMount:               getenv("PLATFORM_VAULT_MOUNT_PATH", ""),
+		CORSOrigins:              getenvList("PLATFORM_CORS_ORIGINS"),
+		RateLimitRPS:             getenvFloat("PLATFORM_RATE_LIMIT_RPS", 20),
+		RateLimitBurst:           getenvInt("PLATFORM_RATE_LIMIT_BURST", 40),
 	}
 
 	if cfg.Auth.Mode != "dev" && cfg.Auth.Mode != "oidc" {
@@ -184,6 +207,12 @@ func Load() (Config, error) {
 	if cfg.ClusterAPIAdapterMode == "real" && cfg.ClusterAPIKubeconfigFile == "" {
 		return Config{}, fmt.Errorf("PLATFORM_CLUSTERAPI_ADAPTER=real requires PLATFORM_CLUSTERAPI_KUBECONFIG_FILE")
 	}
+	if cfg.SecretStoreBackend != "local" && cfg.SecretStoreBackend != "vault" {
+		return Config{}, fmt.Errorf("invalid PLATFORM_SECRETSTORE_BACKEND %q: must be \"local\" or \"vault\"", cfg.SecretStoreBackend)
+	}
+	if cfg.SecretStoreBackend == "vault" && (cfg.VaultAddr == "" || cfg.VaultToken == "" || cfg.VaultMount == "") {
+		return Config{}, fmt.Errorf("PLATFORM_SECRETSTORE_BACKEND=vault requires PLATFORM_VAULT_ADDR, PLATFORM_VAULT_TOKEN, and PLATFORM_VAULT_MOUNT_PATH")
+	}
 	return cfg, nil
 }
 
@@ -210,4 +239,32 @@ func getenvBool(key string, def bool) bool {
 		}
 	}
 	return def
+}
+
+func getenvFloat(key string, def float64) float64 {
+	if v, ok := os.LookupEnv(key); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
+// getenvList splits a comma-separated environment variable, trimming
+// whitespace around each entry and dropping empty ones. Returns nil (not an
+// empty non-nil slice) when the variable is unset, so callers can
+// distinguish "not configured" from "configured as empty".
+func getenvList(key string) []string {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

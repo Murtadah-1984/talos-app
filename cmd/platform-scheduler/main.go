@@ -2,6 +2,10 @@
 // a reconciliation pass that compares each cluster's desired state against
 // observed Argo CD status and updates health metrics/alerts (§21, §31). It
 // never reconciles anything itself (ADR-0003) — only observes and reports.
+//
+// Only one replica does this work at a time (§22, Phase 7 HA): a Redis
+// lease elects a leader, so running multiple replicas for availability
+// doesn't duplicate reconciliation ticks or emit duplicate alerts.
 package main
 
 import (
@@ -19,11 +23,15 @@ import (
 	"github.com/talos-platform/talos-platform/internal/domain/gitops"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/config"
+	"github.com/talos-platform/talos-platform/internal/infrastructure/leaderelection"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/postgres"
+	"github.com/talos-platform/talos-platform/internal/infrastructure/redis"
 	"github.com/talos-platform/talos-platform/internal/integrations/argocd"
 	"github.com/talos-platform/talos-platform/internal/observability"
 	"github.com/talos-platform/talos-platform/migrations"
 )
+
+const leaderLeaseTTL = 45 * time.Second
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -62,20 +70,35 @@ func main() {
 
 	r := &reconciler{clusters: clusters, gitops: gitopsRepo, audit: auditRepo, argo: argoClient, metrics: metrics, logger: logger}
 
+	redisClient := redis.New(cfg.Redis.Addr)
+	defer func() { _ = redisClient.Close() }()
+	elector := leaderelection.New(redisClient, "platform-scheduler-leader", leaderLeaseTTL, logger)
+	defer elector.Resign(context.Background())
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	logger.Info("platform-scheduler started")
-	r.run(ctx)
+	runIfLeader(ctx, elector, r)
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info("shutting down platform-scheduler")
 			return
 		case <-ticker.C:
-			r.run(ctx)
+			runIfLeader(ctx, elector, r)
 		}
 	}
+}
+
+// runIfLeader gates the reconciliation pass on holding the leader lease, so
+// running platform-scheduler with more than one replica for availability
+// doesn't duplicate reconciliation work or emit duplicate alerts.
+func runIfLeader(ctx context.Context, elector *leaderelection.Elector, r *reconciler) {
+	if !elector.IsLeader(ctx) {
+		return
+	}
+	r.run(ctx)
 }
 
 type reconciler struct {

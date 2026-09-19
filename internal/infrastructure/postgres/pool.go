@@ -23,6 +23,7 @@ func NewPool(ctx context.Context, cfg config.PostgresConfig) (*pgxpool.Pool, err
 	if cfg.ConnMaxLifetime > 0 {
 		poolCfg.MaxConnLifetime = cfg.ConnMaxLifetime
 	}
+	poolCfg.ConnConfig.Tracer = newOTelQueryTracer()
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

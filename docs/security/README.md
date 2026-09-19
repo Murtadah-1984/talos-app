@@ -4,20 +4,23 @@ See [ADR-0006](../adr/0006-secrets-management.md) for the secrets architecture a
 of the product spec for the full requirements list. This page covers what's actually
 implemented today vs. still open.
 
-## Implemented (Phase 1)
+## Implemented
 
 - **RBAC**: resource-scoped roles (`PLATFORM_ADMIN` down to `VIEWER`) walking up the
   tenancy hierarchy — `internal/auth/rbac.go`. Enforced on every mutating cluster/machine
-  route via `requireRole` in `internal/interfaces/http/cluster_handlers.go` and
-  `machine_handlers.go`.
+  route via `requireRole`/`requireRoleAudited` in `internal/interfaces/http/cluster_handlers.go`
+  and `machine_handlers.go`.
 - **Authentication**: pluggable `ports.IdentityProvider`. `PLATFORM_AUTH_MODE=dev` issues
   locally-signed HS256 tokens for local development only — **never set this in
   production**. OIDC (Keycloak/Azure AD/GitHub) is the production path and is not yet
   implemented (see [../roadmap.md](../roadmap.md) Phase 2+).
-- **Secrets at rest**: `internal/infrastructure/secrets` provides an AES-256-GCM local
-  backend for development. Vault integration is the production backend and is not yet
-  implemented — the `ports.SecretStore` interface is designed so it drops in without
-  touching call sites.
+- **Secrets at rest**: `internal/infrastructure/secrets` provides two `ports.SecretStore`
+  backends selected via `PLATFORM_SECRET_STORE_BACKEND`:
+  - `local` (default): AES-256-GCM, keyed by `PLATFORM_SECRET_STORE_KEY_HEX`. Development
+    only.
+  - `vault`: HashiCorp Vault KV v2, configured via `PLATFORM_VAULT_ADDR`,
+    `PLATFORM_VAULT_TOKEN`, `PLATFORM_VAULT_MOUNT_PATH` (see
+    [ADR-0006](../adr/0006-secrets-management.md)). This is the production backend.
 - **No secrets in logs**: structured logging (`slog`) never receives raw credential
   values; nothing in the codebase serializes a `SecretRef`'s resolved value into an API
   response.
@@ -28,17 +31,28 @@ implemented today vs. still open.
   `Idempotency-Key` header (§34), preventing duplicate cluster provisioning or machine
   operations from a retried request.
 - **Audit logging**: `internal/domain/audit` + `internal/infrastructure/postgres` record
-  who/what/when/target/result for every audited action; exposed at `GET /api/v1/audit`.
+  who/what/when/target/result for every destructive cluster/machine action (provision,
+  upgrade, scale, sync, delete, reboot, power control), including `DENIED` results when
+  RBAC rejects the request (`requireRoleAudited` in
+  `internal/interfaces/http/audit_write.go`). Exposed at `GET /api/v1/audit`.
+- **Rate limiting**: per-client-IP token bucket
+  (`internal/interfaces/http/middleware/ratelimit.go`), configured via
+  `PLATFORM_RATE_LIMIT_RPS` / `PLATFORM_RATE_LIMIT_BURST`. Set `PLATFORM_RATE_LIMIT_RPS=0`
+  to disable (e.g. local development).
+- **Security headers & CORS**: baseline defensive headers
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+  `Cross-Origin-Resource-Policy`) on every response, plus an explicit CORS origin
+  allowlist via `PLATFORM_CORS_ORIGINS` (comma-separated; empty means same-origin only)
+  — `internal/interfaces/http/middleware/security.go`.
+- **CI scanning**: Trivy filesystem scan (vulnerabilities, secrets, misconfiguration) and
+  `govulncheck` run on every CI build (`.github/workflows/ci.yml`).
 
 ## Open (tracked in the roadmap)
 
 - Real OIDC identity provider implementation.
-- Vault-backed `SecretStore` implementation.
-- Rate limiting.
 - Encryption-at-rest for the Postgres database itself (deployment-level, not
   application-level).
-- Dependency/secret scanning is wired into CI (Trivy filesystem scan); a full SAST pass
-  is not yet part of this phase.
+- A full SAST pass beyond Trivy/govulncheck.
 
 ## Reporting a vulnerability
 

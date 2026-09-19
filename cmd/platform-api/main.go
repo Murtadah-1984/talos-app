@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/talos-platform/talos-platform/internal/application/authservice"
 	"github.com/talos-platform/talos-platform/internal/application/clusterservice"
 	"github.com/talos-platform/talos-platform/internal/application/inframanager"
@@ -123,7 +125,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	secretStore, err := secrets.NewLocalStore(cfg.SecretStoreKeyHex)
+	secretStore, err := secrets.NewFromConfig(cfg.SecretStoreBackend, cfg.VaultAddr, cfg.VaultToken, cfg.VaultMount, cfg.SecretStoreKeyHex)
 	if err != nil {
 		logger.Error("constructing secret store", "error", err)
 		os.Exit(1)
@@ -179,13 +181,16 @@ func main() {
 		MachineService:   machineSvc,
 		Events:           websocket.NewHub(),
 		MetricsHandler:   metrics.Handler(),
+		CORSOrigins:      cfg.CORSOrigins,
+		RateLimitRPS:     cfg.RateLimitRPS,
+		RateLimitBurst:   cfg.RateLimitBurst,
 	}
 
 	router := httpapi.NewRouter(deps)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           router,
+		Handler:           otelhttp.NewHandler(router, "platform-api"),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

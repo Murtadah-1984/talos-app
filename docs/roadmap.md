@@ -192,12 +192,34 @@ testable — no phase depends on unfinished work from a later phase to run.
 
 ## Phase 7 — Production Hardening
 
-- [ ] HA for API/worker/scheduler, distributed workflow locks
-- [ ] Vault-backed secrets management
-- [ ] Full audit coverage of destructive operations
-- [ ] Backup/disaster-recovery runbooks
-- [ ] Rate limiting, security hardening pass, dependency/secret scanning in CI
-- [ ] Full OpenTelemetry coverage (traces/metrics/logs across every integration)
+- [x] HA for API/worker/scheduler, distributed workflow locks — `platform-scheduler`
+      now uses Redis-lease leader election (`internal/infrastructure/leaderelection`);
+      `platform-api`/`platform-worker` were already stateless/lock-free via Postgres
+      step claiming (ADR-0005). See [../operations/README.md](operations/README.md#high-availability).
+- [x] Vault-backed secrets management — `internal/infrastructure/secrets/vault.go`,
+      selected via `PLATFORM_SECRET_STORE_BACKEND=vault` (ADR-0006).
+- [x] Full audit coverage of destructive operations — every destructive cluster/machine
+      handler now records an audit event including `DENIED` RBAC outcomes
+      (`internal/interfaces/http/audit_write.go`).
+- [x] Backup/disaster-recovery runbooks — concrete `pg_dump`/`pg_restore` scripts at
+      `scripts/backup-postgres.sh` / `scripts/restore-postgres.sh`, documented in
+      [../disaster-recovery/README.md](disaster-recovery/README.md).
+- [x] Rate limiting, security hardening pass, dependency/secret scanning in CI —
+      per-IP token-bucket rate limiting, security headers, CORS allowlist
+      (`internal/interfaces/http/middleware`), CI go-version fix, `govulncheck` +
+      expanded Trivy scanning (`.github/workflows/ci.yml`).
+- [x] Full OpenTelemetry coverage (traces across HTTP, Postgres, workflow engine) —
+      `otelhttp` on the API server, a hand-rolled `pgx.QueryTracer`
+      (`internal/infrastructure/postgres/tracer.go`), and per-step spans in the
+      workflow engine (`internal/workflows/engine.go`). Per-integration
+      (Talos/GitHub/ArgoCD/ClusterAPI/Proxmox) spans are not yet instrumented — still
+      open.
+- [ ] OpenTelemetry metrics/logs export (only traces are wired today; Prometheus
+      metrics exist separately via `/metrics` but are not yet correlated with traces).
+- [ ] Per-integration client call spans (Talos/GitHub/ArgoCD/ClusterAPI/Proxmox).
+- [ ] Automated (scheduled) database backups — the scripts exist but nothing invokes
+      them on a schedule yet; that's a deployment-level concern (cron/CronJob) left to
+      the operator for now.
 
 ## Non-goals (always)
 
