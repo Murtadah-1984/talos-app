@@ -55,6 +55,11 @@ type Config struct {
 	ArgoCDServerURL string
 	ArgoCDToken     string
 
+	// ClusterAPIKubeconfigFile points at a kubeconfig for the Cluster API
+	// management cluster, used when ClusterAPIAdapterMode is "real" — same
+	// bootstrapping simplification as TalosConfigFile.
+	ClusterAPIKubeconfigFile string
+
 	SecretStoreBackend string // "local" (dev, AES-GCM at rest) or "vault"
 	SecretStoreKeyHex  string // 32-byte hex key for the local backend
 }
@@ -117,17 +122,18 @@ func Load() (Config, error) {
 			PrometheusAddr: getenv("PLATFORM_PROMETHEUS_ADDR", ":9090"),
 			TracingEnabled: getenvBool("PLATFORM_TRACING_ENABLED", true),
 		},
-		TalosAdapterMode:      getenv("PLATFORM_TALOS_ADAPTER", "mock"),
-		GitHubAdapterMode:     getenv("PLATFORM_GITHUB_ADAPTER", "mock"),
-		ArgoCDAdapterMode:     getenv("PLATFORM_ARGOCD_ADAPTER", "mock"),
-		ClusterAPIAdapterMode: getenv("PLATFORM_CLUSTERAPI_ADAPTER", "mock"),
-		ProxmoxAdapterMode:    getenv("PLATFORM_PROXMOX_ADAPTER", "mock"),
-		TalosConfigFile:       getenv("PLATFORM_TALOS_CONFIG_FILE", ""),
-		GitHubToken:           getenv("PLATFORM_GITHUB_TOKEN", ""),
-		ArgoCDServerURL:       getenv("PLATFORM_ARGOCD_SERVER_URL", ""),
-		ArgoCDToken:           getenv("PLATFORM_ARGOCD_TOKEN", ""),
-		SecretStoreBackend:    getenv("PLATFORM_SECRETSTORE_BACKEND", "local"),
-		SecretStoreKeyHex:     getenv("PLATFORM_SECRETSTORE_KEY_HEX", ""),
+		TalosAdapterMode:         getenv("PLATFORM_TALOS_ADAPTER", "mock"),
+		GitHubAdapterMode:        getenv("PLATFORM_GITHUB_ADAPTER", "mock"),
+		ArgoCDAdapterMode:        getenv("PLATFORM_ARGOCD_ADAPTER", "mock"),
+		ClusterAPIAdapterMode:    getenv("PLATFORM_CLUSTERAPI_ADAPTER", "mock"),
+		ProxmoxAdapterMode:       getenv("PLATFORM_PROXMOX_ADAPTER", "mock"),
+		TalosConfigFile:          getenv("PLATFORM_TALOS_CONFIG_FILE", ""),
+		GitHubToken:              getenv("PLATFORM_GITHUB_TOKEN", ""),
+		ArgoCDServerURL:          getenv("PLATFORM_ARGOCD_SERVER_URL", ""),
+		ArgoCDToken:              getenv("PLATFORM_ARGOCD_TOKEN", ""),
+		ClusterAPIKubeconfigFile: getenv("PLATFORM_CLUSTERAPI_KUBECONFIG_FILE", ""),
+		SecretStoreBackend:       getenv("PLATFORM_SECRETSTORE_BACKEND", "local"),
+		SecretStoreKeyHex:        getenv("PLATFORM_SECRETSTORE_KEY_HEX", ""),
 	}
 
 	if cfg.Auth.Mode != "dev" && cfg.Auth.Mode != "oidc" {
@@ -150,6 +156,12 @@ func Load() (Config, error) {
 	}
 	if cfg.ArgoCDAdapterMode == "real" && (cfg.ArgoCDServerURL == "" || cfg.ArgoCDToken == "") {
 		return Config{}, fmt.Errorf("PLATFORM_ARGOCD_ADAPTER=real requires PLATFORM_ARGOCD_SERVER_URL and PLATFORM_ARGOCD_TOKEN")
+	}
+	if cfg.ClusterAPIAdapterMode != "mock" && cfg.ClusterAPIAdapterMode != "real" {
+		return Config{}, fmt.Errorf("invalid PLATFORM_CLUSTERAPI_ADAPTER %q: must be \"mock\" or \"real\"", cfg.ClusterAPIAdapterMode)
+	}
+	if cfg.ClusterAPIAdapterMode == "real" && cfg.ClusterAPIKubeconfigFile == "" {
+		return Config{}, fmt.Errorf("PLATFORM_CLUSTERAPI_ADAPTER=real requires PLATFORM_CLUSTERAPI_KUBECONFIG_FILE")
 	}
 	return cfg, nil
 }

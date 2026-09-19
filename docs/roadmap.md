@@ -119,10 +119,34 @@ testable — no phase depends on unfinished work from a later phase to run.
 
 ## Phase 5 — Cluster API
 
-- [ ] `ClusterAPIProvider` port + real client (Cluster, KubeadmControlPlane,
-      MachineDeployment, infra provider CRs)
-- [ ] CAPI manifest generation committed via the GitOps pipeline
-- [ ] Scaling, upgrades, remediation surfaced through the platform API/UI
+- [x] `ClusterAPIProvider` port + real client (`internal/integrations/clusterapi/client.go`).
+      `RenderManifests` is pure manifest generation (no client needed) for the core CAPI
+      `Cluster`/`MachineDeployment` resources (stable upstream schema) plus
+      `TalosControlPlane`/`TalosConfigTemplate` from Sidero Labs' Cluster API Control
+      Plane/Bootstrap Providers for Talos, rendered best-effort — those two CRDs are
+      less universally documented than core CAPI, flagged in-code as "verify against
+      your installed CACPPT/CABPT version." `GetClusterStatus` is a real, read-only
+      `k8s.io/client-go` dynamic client against the management cluster (never writes
+      CAPI resources — ADR-0002). Selected via `PLATFORM_CLUSTERAPI_ADAPTER=real` +
+      `PLATFORM_CLUSTERAPI_KUBECONFIG_FILE` (default `mock`).
+- [x] CAPI manifest generation committed via the GitOps pipeline — not just at
+      provisioning time: `internal/workflows/capi_change.go` adds
+      `commitClusterAPIChange`/`waitForClusterAPIReady`, shared by provisioning,
+      `CLUSTER_UPGRADE`, and `WORKER_SCALE`, so a `CLUSTER_API`-mode cluster's upgrades
+      and scale requests also commit -> PR -> merge -> (Argo CD sync if enabled) rather
+      than being silent no-ops. `DIRECT_TALOS`-mode clusters skip this path entirely and
+      keep using `TalosClient` directly.
+- [x] Scaling/upgrades surfaced through the platform API/UI — already-existing
+      `POST /clusters/{id}/upgrade` and `/scale` now actually reach Cluster API for
+      `CLUSTER_API`-mode clusters via the above; no new endpoints were needed since the
+      gap was in the workflow, not the API surface.
+- [ ] **Remediation** (CAPI's own MachineHealthCheck-driven replacement) is observed
+      (via `GetClusterStatus`'s Machine-level readiness) but not orchestrated — there is
+      no platform-initiated "replace this unhealthy machine" action yet.
+- [ ] **Provider-specific infrastructure CRs** (the `infrastructureRef` a real
+      deployment points at) are deliberately not rendered: no infrastructure provider
+      in this codebase is CAPI-aware yet (Phase 6 is still mock-only), so a fabricated
+      infra CRD shape would be more misleading than useful.
 
 ## Phase 6 — Infrastructure Providers
 

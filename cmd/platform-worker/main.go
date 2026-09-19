@@ -85,7 +85,11 @@ func main() {
 		logger.Error("constructing Argo CD client", "error", err)
 		os.Exit(1)
 	}
-	capiProvider := clusterapi.NewMockProvider()
+	capiProvider, err := clusterapi.NewFromConfig(cfg.ClusterAPIAdapterMode, cfg.ClusterAPIKubeconfigFile)
+	if err != nil {
+		logger.Error("constructing Cluster API client", "error", err)
+		os.Exit(1)
+	}
 
 	deps := workflows.ClusterProvisionDeps{
 		Clusters: clusters, Machines: machines, GitOps: gitopsRepo,

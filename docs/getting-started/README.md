@@ -83,3 +83,17 @@ export PLATFORM_ARGOCD_TOKEN=...   # `argocd account generate-token`, or a sessi
 
 See [../argocd/README.md](../argocd/README.md) for what the real client does and what's
 still open (ApplicationSet discovery, Git-revert rollback).
+
+## Cluster API: mock vs. real
+
+By default (`PLATFORM_CLUSTERAPI_ADAPTER=mock`) `CLUSTER_API`-mode clusters render
+manifests and observe status against an in-memory stand-in. To point at a real Cluster
+API management cluster:
+
+```bash
+export PLATFORM_CLUSTERAPI_ADAPTER=real
+export PLATFORM_CLUSTERAPI_KUBECONFIG_FILE=/path/to/management-cluster-kubeconfig
+```
+
+See [../cluster-api/README.md](../cluster-api/README.md) for what the real client
+renders/observes and what's still open (remediation, provider-specific infra CRs).

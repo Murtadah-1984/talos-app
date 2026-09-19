@@ -298,3 +298,93 @@ func TestClusterProvisionWorkflow_EndToEnd(t *testing.T) {
 		t.Fatalf("expected a pull request URL, got %q", changeSets[0].PullRequestURL)
 	}
 }
+
+// TestClusterAPIWorkflows_CommitScaleChangeToGit exercises the Phase 5
+// addition: for a CLUSTER_API-mode cluster, WORKER_SCALE must commit the new
+// desired state (including rendered CAPI manifests) to Git rather than
+// applying anything directly (ADR-0002) — the same "commit -> PR -> merge"
+// shape as provisioning, reused via commitClusterAPIChange.
+func TestClusterAPIWorkflows_CommitScaleChangeToGit(t *testing.T) {
+	clusters := newFakeClusterRepo()
+	gitopsRepo := newFakeGitOpsRepo()
+	gitProvider := mockgithub.NewMockProvider()
+	argoClient := argocd.NewMockClient()
+	capiProvider := clusterapi.NewMockProvider()
+	talosClient := mocktalos.NewMockClient()
+
+	repo := &gitops.GitRepository{ID: shared.NewID(), Owner: "acme", Name: "gitops", DefaultBranch: "main"}
+	if err := gitopsRepo.CreateRepository(context.Background(), repo); err != nil {
+		t.Fatalf("seeding git repository: %v", err)
+	}
+
+	c := &cluster.Cluster{
+		ID:           shared.NewID(),
+		SiteID:       shared.NewID(),
+		Name:         "capi-prod",
+		ProviderMode: cluster.ProviderModeClusterAPI,
+		State:        cluster.StateReady,
+		Spec: cluster.Spec{
+			KubernetesVersion: "v1.31.1",
+			TalosVersion:      "v1.8.2",
+			ControlPlane:      cluster.ControlPlaneSpec{Replicas: 3},
+			Workers:           []cluster.WorkerPoolSpec{{Name: "default", Replicas: 3}},
+			Network:           cluster.NetworkSpec{PodCIDR: "10.244.0.0/16", ServiceCIDR: "10.96.0.0/12"},
+		},
+	}
+	if err := clusters.Create(context.Background(), c); err != nil {
+		t.Fatalf("seeding cluster: %v", err)
+	}
+	if err := gitopsRepo.CreateGitOpsConfiguration(context.Background(), &gitops.GitOpsConfiguration{
+		ClusterID: c.ID, RepositoryID: repo.ID, Path: "clusters/capi-prod", Branch: repo.DefaultBranch,
+	}); err != nil {
+		t.Fatalf("seeding gitops configuration: %v", err)
+	}
+
+	deps := workflows.ClusterProvisionDeps{
+		Clusters: clusters, Machines: fakeMachineRepo{}, GitOps: gitopsRepo,
+		Talos: talosClient, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
+	}
+
+	broker := inprocess.NewBroker()
+	workflowRepo := newFakeRepo()
+	engine := workflows.NewEngine(workflowRepo, broker, nil)
+	engine.Register(workflows.NewWorkerScaleDefinition(deps))
+	if err := engine.StartConsuming(context.Background()); err != nil {
+		t.Fatalf("StartConsuming: %v", err)
+	}
+	defer engine.Stop()
+
+	// Simulate clusterservice.ScaleWorkers having already updated the
+	// desired replica count before enqueuing the workflow.
+	c.Spec.Workers[0].Replicas = 6
+	if err := clusters.Update(context.Background(), c); err != nil {
+		t.Fatalf("updating cluster spec: %v", err)
+	}
+
+	wf, err := engine.Enqueue(context.Background(), workflow.TypeWorkerScale, "scale-test", nil, &c.ID, nil, shared.NewID())
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	gotWF, steps, err := engine.Get(context.Background(), wf.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if gotWF.Status != workflow.StatusSucceeded {
+		var failed string
+		for _, s := range steps {
+			if s.Status == workflow.StatusFailed {
+				failed = s.Name + ": " + s.Error
+			}
+		}
+		t.Fatalf("expected workflow to succeed, got %s (workflow error: %s, step error: %s)", gotWF.Status, gotWF.Error, failed)
+	}
+
+	changeSets, err := gitopsRepo.ListChangeSetsForCluster(context.Background(), c.ID, shared.DefaultPage())
+	if err != nil || len(changeSets) != 1 {
+		t.Fatalf("expected exactly one change set from the scale workflow, got %d (err: %v)", len(changeSets), err)
+	}
+	if changeSets[0].Status != gitops.ChangeSetMerged {
+		t.Fatalf("expected the scale change set to be MERGED (no Argo CD enabled), got %s", changeSets[0].Status)
+	}
+}

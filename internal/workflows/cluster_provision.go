@@ -334,19 +334,10 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				return map[string]any{"synced": true}, nil
 			}),
 			step("wait-for-cluster-api", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
-				if c.ProviderMode != cluster.ProviderModeClusterAPI {
-					return map[string]any{"skipped": true}, nil
+				if err := waitForClusterAPIReady(ctx, deps, c); err != nil {
+					return nil, err
 				}
-				statuses, err := deps.ClusterAPI.GetClusterStatus(ctx, "default", c.Name)
-				if err != nil {
-					return nil, fmt.Errorf("checking CAPI status: %w", err)
-				}
-				for _, s := range statuses {
-					if !s.Ready {
-						return nil, fmt.Errorf("CAPI resource %s/%s not ready (phase=%s)", s.Kind, s.Name, s.Phase)
-					}
-				}
-				return map[string]any{"capiReady": true}, nil
+				return map[string]any{"capiReady": c.ProviderMode == cluster.ProviderModeClusterAPI}, nil
 			}),
 			step("check-talos-health", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
 				if err := transitionAndSave(ctx, deps.Clusters, c, cluster.StateConfiguring); err != nil {
