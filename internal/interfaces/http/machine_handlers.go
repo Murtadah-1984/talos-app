@@ -99,6 +99,70 @@ func mountMachines(r chi.Router, d Deps) {
 			}
 			writeJSON(w, http.StatusAccepted, op)
 		})
+
+		// Hard power control (§11, §12, ADR-0007): goes through the
+		// machine's infrastructure provider (BMC or hypervisor API), not
+		// Talos — distinct from /reboot above, which asks the OS to do it
+		// gracefully and does nothing if the OS is unresponsive.
+		sub.Post("/{id}/power/on", func(w http.ResponseWriter, r *http.Request) {
+			id, err := shared.ParseID(chi.URLParam(r, "id"))
+			if err != nil {
+				writeError(w, shared.ErrInvalidInput)
+				return
+			}
+			scopeKind, scopeID := machineClusterScope(r, d, id)
+			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleOperator)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			op, err := d.MachineService.HardPowerOn(r.Context(), id, u.ID, idempotencyKey(r, "power-on-"+id.String()))
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, op)
+		})
+
+		sub.Post("/{id}/power/off", func(w http.ResponseWriter, r *http.Request) {
+			id, err := shared.ParseID(chi.URLParam(r, "id"))
+			if err != nil {
+				writeError(w, shared.ErrInvalidInput)
+				return
+			}
+			scopeKind, scopeID := machineClusterScope(r, d, id)
+			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleClusterAdmin)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			op, err := d.MachineService.HardPowerOff(r.Context(), id, u.ID, idempotencyKey(r, "power-off-"+id.String()))
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, op)
+		})
+
+		sub.Post("/{id}/power/cycle", func(w http.ResponseWriter, r *http.Request) {
+			id, err := shared.ParseID(chi.URLParam(r, "id"))
+			if err != nil {
+				writeError(w, shared.ErrInvalidInput)
+				return
+			}
+			scopeKind, scopeID := machineClusterScope(r, d, id)
+			u, err := requireRole(r, d, scopeKind, scopeID, user.RoleClusterAdmin)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			op, err := d.MachineService.HardPowerCycle(r.Context(), id, u.ID, idempotencyKey(r, "power-cycle-"+id.String()))
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, op)
+		})
 	})
 }
 

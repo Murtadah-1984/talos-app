@@ -97,3 +97,26 @@ export PLATFORM_CLUSTERAPI_KUBECONFIG_FILE=/path/to/management-cluster-kubeconfi
 
 See [../cluster-api/README.md](../cluster-api/README.md) for what the real client
 renders/observes and what's still open (remediation, provider-specific infra CRs).
+
+## Proxmox and bare-metal power control: mock vs. real
+
+By default (`PLATFORM_PROXMOX_ADAPTER=mock`) Proxmox VM lifecycle runs against an
+in-memory stand-in, and bare-metal power control reports `NOT_CONFIGURED`. To point at
+a real Proxmox cluster and enable real BMC power control:
+
+```bash
+export PLATFORM_PROXMOX_ADAPTER=real
+export PLATFORM_PROXMOX_API_URL=https://pve.example.com:8006
+export PLATFORM_PROXMOX_NODE=pve1
+export PLATFORM_PROXMOX_API_TOKEN='root@pam!platform=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+export PLATFORM_PROXMOX_TEMPLATE_VMID=9000   # a pre-built Talos VM template
+
+export PLATFORM_BAREMETAL_IPMI_ENABLED=true      # requires the `ipmitool` binary on PATH
+export PLATFORM_BAREMETAL_REDFISH_ENABLED=true   # both may be enabled at once
+```
+
+BMC credentials are per-machine, resolved from the SecretStore at call time (JSON
+`{"username": "...", "password": "..."}` under the machine's `BMC.CredentialRef`), not
+from environment variables. See [../infrastructure/README.md](../infrastructure/README.md)
+for what the real clients do and the extension-point checklist for adding another
+provider (AWS/Azure/GCP/OpenStack/VMware/Equinix Metal).

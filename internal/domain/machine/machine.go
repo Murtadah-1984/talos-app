@@ -77,6 +77,7 @@ type Machine struct {
 	ClusterID         *shared.ID // nil until assigned to a cluster
 	SiteID            shared.ID
 	ProviderID        shared.ID // infraprovider.InfrastructureProvider
+	ProviderMachineID string    // the provider's own identifier (e.g. a Proxmox VMID) — never the platform's own ID
 	Hostname          string
 	ManagementIP      string
 	Role              Role

@@ -150,9 +150,45 @@ testable — no phase depends on unfinished work from a later phase to run.
 
 ## Phase 6 — Infrastructure Providers
 
-- [ ] Bare Metal provider (inventory-based, BMC-agnostic core)
-- [ ] Proxmox provider (VM lifecycle, cloud-init, Talos image deployment)
-- [ ] Extension points documented for AWS/Azure/GCP/Equinix Metal/OpenStack/VMware
+- [x] Bare Metal provider — the inventory-based core shipped in Phase 1; Phase 6 adds
+      the two real, protocol-specific `PowerController`s it was designed around
+      (`internal/integrations/baremetal/ipmi.go`, `redfish.go`): IPMI shells out to
+      `ipmitool` (no mature pure-Go IPMI stack worth vendoring), with the BMC password
+      passed via the `IPMI_PASSWORD` environment variable and `-E`, never as a plain
+      CLI argument; Redfish is a hand-rolled REST client against the standard DMTF
+      Redfish `ComputerSystem.Reset` action. `Provider` now dispatches to the
+      controller registered for each machine's own declared BMC protocol (a fix: it
+      previously held one controller for the whole inventory and had no way to know
+      which protocol a given machine actually used). Enabled via
+      `PLATFORM_BAREMETAL_IPMI_ENABLED`/`PLATFORM_BAREMETAL_REDFISH_ENABLED`; both can
+      be on at once for a mixed-protocol inventory.
+- [x] Proxmox provider (`internal/integrations/proxmox/client.go`) — a hand-rolled REST
+      client against the Proxmox API (API-token authenticated): discovery, cloning the
+      configured Talos VM template (`ProvisionMachine`), resource sizing, start/stop/
+      reset, deletion, and status. Selected via `PLATFORM_PROXMOX_ADAPTER=real` +
+      `PLATFORM_PROXMOX_API_URL`/`_NODE`/`_API_TOKEN`/`_TEMPLATE_VMID`.
+- [x] Closed a real gap found while wiring this up: `ports.InfrastructureProvider`
+      implementations existed since Phase 1 but nothing ever resolved or called them —
+      no registry, no wiring, no reachable API route. Added
+      `internal/application/inframanager` (a `infraprovider.Type` -> provider
+      registry), a `machine.ProviderMachineID` field (migration `0006` — a machine's
+      platform UUID was never the same value the provider uses, e.g. a Proxmox VMID,
+      and nothing recorded the latter), and hard power control end-to-end:
+      `machineservice.HardPowerOn/Off/Cycle` -> `POST /machines/{id}/power/{on,off,cycle}`
+      -> CLI (`talos-platform machine power-{on,off,cycle}`) -> a "Power Cycle" button
+      in the UI. This is distinct from the existing `/reboot` (Talos-level, graceful,
+      does nothing if the OS is unresponsive) — hard power goes through the BMC/
+      hypervisor and works regardless of OS state.
+- [x] Extension points documented for AWS/Azure/GCP/Equinix Metal/OpenStack/VMware —
+      see [../infrastructure/README.md](../infrastructure/README.md)'s "Adding a new
+      provider" checklist.
+- [ ] **Known limitation** (same pattern as every other Phase 2-5 adapter): Proxmox and
+      the bare-metal power controllers are each one process-wide instance built from
+      global configuration, not a distinct instance per organization's own registered
+      `infraprovider.InfrastructureProvider` row and credentials.
+- [ ] Talos image/template deployment mechanics beyond cloning (building/publishing the
+      Talos Proxmox template itself, or the bare-metal PXE/ISO boot pipeline) are
+      operator setup, not something this platform automates.
 
 ## Phase 7 — Production Hardening
 

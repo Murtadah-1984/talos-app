@@ -60,6 +60,21 @@ type Config struct {
 	// bootstrapping simplification as TalosConfigFile.
 	ClusterAPIKubeconfigFile string
 
+	// Proxmox* configure the real Proxmox client when ProxmoxAdapterMode is
+	// "real" (§12). ProxmoxAPIToken is pre-formatted the way Proxmox itself
+	// prints it ("user@realm!tokenid=secret").
+	ProxmoxAPIURL       string
+	ProxmoxNode         string
+	ProxmoxAPIToken     string
+	ProxmoxTemplateVMID string
+
+	// BareMetal*Enabled register real IPMI/Redfish power controllers (§11).
+	// Both may be enabled at once — a site's inventory can mix protocols,
+	// dispatched per-machine. Neither implies the other; a protocol left
+	// disabled reports NOT_CONFIGURED rather than silently no-op-ing.
+	BareMetalIPMIEnabled    bool
+	BareMetalRedfishEnabled bool
+
 	SecretStoreBackend string // "local" (dev, AES-GCM at rest) or "vault"
 	SecretStoreKeyHex  string // 32-byte hex key for the local backend
 }
@@ -132,6 +147,12 @@ func Load() (Config, error) {
 		ArgoCDServerURL:          getenv("PLATFORM_ARGOCD_SERVER_URL", ""),
 		ArgoCDToken:              getenv("PLATFORM_ARGOCD_TOKEN", ""),
 		ClusterAPIKubeconfigFile: getenv("PLATFORM_CLUSTERAPI_KUBECONFIG_FILE", ""),
+		ProxmoxAPIURL:            getenv("PLATFORM_PROXMOX_API_URL", ""),
+		ProxmoxNode:              getenv("PLATFORM_PROXMOX_NODE", ""),
+		ProxmoxAPIToken:          getenv("PLATFORM_PROXMOX_API_TOKEN", ""),
+		ProxmoxTemplateVMID:      getenv("PLATFORM_PROXMOX_TEMPLATE_VMID", ""),
+		BareMetalIPMIEnabled:     getenvBool("PLATFORM_BAREMETAL_IPMI_ENABLED", false),
+		BareMetalRedfishEnabled:  getenvBool("PLATFORM_BAREMETAL_REDFISH_ENABLED", false),
 		SecretStoreBackend:       getenv("PLATFORM_SECRETSTORE_BACKEND", "local"),
 		SecretStoreKeyHex:        getenv("PLATFORM_SECRETSTORE_KEY_HEX", ""),
 	}

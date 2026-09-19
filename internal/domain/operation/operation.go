@@ -25,12 +25,21 @@ const (
 	KindResetMachine      Kind = "RESET_MACHINE"
 	KindRemoveEtcdMember  Kind = "REMOVE_ETCD_MEMBER"
 	KindDestroyCluster    Kind = "DESTROY_CLUSTER"
+
+	// Hard power operations go through the infrastructure provider's BMC/
+	// hypervisor API (ADR-0007, §11/§12) rather than Talos — they work even
+	// when the OS itself is unresponsive, unlike KindRebootMachine/
+	// KindShutdownMachine which ask Talos to do it gracefully.
+	KindHardPowerOn    Kind = "HARD_POWER_ON"
+	KindHardPowerOff   Kind = "HARD_POWER_OFF"
+	KindHardPowerCycle Kind = "HARD_POWER_CYCLE"
 )
 
 // Danger reports whether a Kind requires explicit confirmation + elevated RBAC (§17).
 func (k Kind) Danger() bool {
 	switch k {
-	case KindResetMachine, KindRemoveEtcdMember, KindDestroyCluster, KindUpgradeTalos:
+	case KindResetMachine, KindRemoveEtcdMember, KindDestroyCluster, KindUpgradeTalos,
+		KindHardPowerOff, KindHardPowerCycle:
 		return true
 	default:
 		return false

@@ -14,16 +14,21 @@ import (
 
 	"github.com/talos-platform/talos-platform/internal/application/authservice"
 	"github.com/talos-platform/talos-platform/internal/application/clusterservice"
+	"github.com/talos-platform/talos-platform/internal/application/inframanager"
 	"github.com/talos-platform/talos-platform/internal/application/machineservice"
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/auth"
+	"github.com/talos-platform/talos-platform/internal/domain/infraprovider"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/config"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/inprocess"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/postgres"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/rabbitmq"
+	"github.com/talos-platform/talos-platform/internal/infrastructure/secrets"
 	"github.com/talos-platform/talos-platform/internal/integrations/argocd"
+	"github.com/talos-platform/talos-platform/internal/integrations/baremetal"
 	"github.com/talos-platform/talos-platform/internal/integrations/clusterapi"
 	"github.com/talos-platform/talos-platform/internal/integrations/github"
+	"github.com/talos-platform/talos-platform/internal/integrations/proxmox"
 	"github.com/talos-platform/talos-platform/internal/integrations/talos"
 	httpapi "github.com/talos-platform/talos-platform/internal/interfaces/http"
 	"github.com/talos-platform/talos-platform/internal/interfaces/websocket"
@@ -118,6 +123,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	secretStore, err := secrets.NewLocalStore(cfg.SecretStoreKeyHex)
+	if err != nil {
+		logger.Error("constructing secret store", "error", err)
+		os.Exit(1)
+	}
+	proxmoxProvider, err := proxmox.NewFromConfig(cfg.ProxmoxAdapterMode, cfg.ProxmoxAPIURL, cfg.ProxmoxNode, cfg.ProxmoxAPIToken, cfg.ProxmoxTemplateVMID)
+	if err != nil {
+		logger.Error("constructing Proxmox client", "error", err)
+		os.Exit(1)
+	}
+	bareMetalProvider := baremetal.NewProviderFromConfig(secretStore, cfg.BareMetalIPMIEnabled, cfg.BareMetalRedfishEnabled)
+	infraRegistry := inframanager.NewRegistry(map[infraprovider.Type]ports.InfrastructureProvider{
+		infraprovider.TypeProxmox:   proxmoxProvider,
+		infraprovider.TypeBareMetal: bareMetalProvider,
+	})
+
 	workflowDeps := workflows.ClusterProvisionDeps{
 		Clusters: clusters, Machines: machines, GitOps: gitopsRepo,
 		Talos: talosClient, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
@@ -135,7 +156,7 @@ func main() {
 
 	authSvc := authservice.New(users, issuer)
 	clusterSvc := clusterservice.New(clusters, gitopsRepo, engine, argoClient)
-	machineSvc := machineservice.New(machines, operations, talosClient)
+	machineSvc := machineservice.New(machines, operations, talosClient, infraProviders, infraRegistry)
 
 	metrics := observability.NewMetrics()
 

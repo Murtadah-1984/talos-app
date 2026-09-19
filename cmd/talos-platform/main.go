@@ -157,6 +157,23 @@ func machineCmd(newClient func() *cli.Client) *cobra.Command {
 		},
 	})
 
+	for _, action := range []string{"on", "off", "cycle"} {
+		action := action
+		cmd.AddCommand(&cobra.Command{
+			Use:   "power-" + action + " [id]",
+			Short: "Hard power-" + action + " a machine via its infrastructure provider (BMC/hypervisor), bypassing the OS",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(_ *cobra.Command, args []string) error {
+				var out any
+				if err := newClient().Post("/api/v1/machines/"+args[0]+"/power/"+action, nil, &out); err != nil {
+					return err
+				}
+				printJSON(out)
+				return nil
+			},
+		})
+	}
+
 	return cmd
 }
 

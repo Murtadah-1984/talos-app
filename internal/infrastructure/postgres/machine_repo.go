@@ -22,7 +22,7 @@ func NewMachineRepository(pool *pgxpool.Pool) *MachineRepository {
 	return &MachineRepository{pool: pool}
 }
 
-const machineColumns = `id, cluster_id, site_id, provider_id, hostname, management_ip, role, phase,
+const machineColumns = `id, cluster_id, site_id, provider_id, provider_machine_id, hostname, management_ip, role, phase,
 	talos_version, kubernetes_version, cpu, memory_bytes, bmc_protocol, bmc_address, bmc_credential_ref,
 	labels, created_at, updated_at`
 
@@ -40,11 +40,11 @@ func (r *MachineRepository) Create(ctx context.Context, m *machine.Machine) erro
 		bmcProto, bmcAddr, bmcCred = m.BMC.Protocol, m.BMC.Address, m.BMC.CredentialRef
 	}
 	_, err = r.pool.Exec(ctx,
-		`INSERT INTO machines (id, cluster_id, site_id, provider_id, hostname, management_ip, role, phase,
+		`INSERT INTO machines (id, cluster_id, site_id, provider_id, provider_machine_id, hostname, management_ip, role, phase,
 			talos_version, kubernetes_version, cpu, memory_bytes, bmc_protocol, bmc_address, bmc_credential_ref,
 			labels, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-		m.ID, m.ClusterID, m.SiteID, m.ProviderID, m.Hostname, m.ManagementIP, m.Role, m.Phase,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+		m.ID, m.ClusterID, m.SiteID, m.ProviderID, m.ProviderMachineID, m.Hostname, m.ManagementIP, m.Role, m.Phase,
 		m.TalosVersion, m.KubernetesVersion, m.CPU, m.MemoryBytes, bmcProto, bmcAddr, bmcCred,
 		labelsJSON, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
@@ -112,10 +112,10 @@ func (r *MachineRepository) Update(ctx context.Context, m *machine.Machine) erro
 		bmcProto, bmcAddr, bmcCred = m.BMC.Protocol, m.BMC.Address, m.BMC.CredentialRef
 	}
 	tag, err := r.pool.Exec(ctx,
-		`UPDATE machines SET cluster_id=$2, site_id=$3, provider_id=$4, hostname=$5, management_ip=$6, role=$7,
-			phase=$8, talos_version=$9, kubernetes_version=$10, cpu=$11, memory_bytes=$12, bmc_protocol=$13,
-			bmc_address=$14, bmc_credential_ref=$15, labels=$16, updated_at=$17 WHERE id=$1`,
-		m.ID, m.ClusterID, m.SiteID, m.ProviderID, m.Hostname, m.ManagementIP, m.Role, m.Phase,
+		`UPDATE machines SET cluster_id=$2, site_id=$3, provider_id=$4, provider_machine_id=$5, hostname=$6, management_ip=$7, role=$8,
+			phase=$9, talos_version=$10, kubernetes_version=$11, cpu=$12, memory_bytes=$13, bmc_protocol=$14,
+			bmc_address=$15, bmc_credential_ref=$16, labels=$17, updated_at=$18 WHERE id=$1`,
+		m.ID, m.ClusterID, m.SiteID, m.ProviderID, m.ProviderMachineID, m.Hostname, m.ManagementIP, m.Role, m.Phase,
 		m.TalosVersion, m.KubernetesVersion, m.CPU, m.MemoryBytes, bmcProto, bmcAddr, bmcCred,
 		labelsJSON, m.UpdatedAt)
 	if err != nil {
@@ -186,7 +186,7 @@ func scanMachine(row rowScanner) (*machine.Machine, error) {
 	m := &machine.Machine{}
 	var role, phase, bmcProto, bmcAddr, bmcCred string
 	var labelsJSON []byte
-	err := row.Scan(&m.ID, &m.ClusterID, &m.SiteID, &m.ProviderID, &m.Hostname, &m.ManagementIP, &role, &phase,
+	err := row.Scan(&m.ID, &m.ClusterID, &m.SiteID, &m.ProviderID, &m.ProviderMachineID, &m.Hostname, &m.ManagementIP, &role, &phase,
 		&m.TalosVersion, &m.KubernetesVersion, &m.CPU, &m.MemoryBytes, &bmcProto, &bmcAddr, &bmcCred,
 		&labelsJSON, &m.CreatedAt, &m.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {

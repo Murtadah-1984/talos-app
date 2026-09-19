@@ -1,9 +1,10 @@
 // Package baremetal implements the ports.InfrastructureProvider adapter for
 // pre-existing physical hardware (§11, ADR-0007). Unlike a cloud/VM provider,
 // bare metal machines are not created by this provider — they are registered
-// (discovered or manually enrolled) and then power-managed via a pluggable
-// PowerController. IPMI/Redfish implementations of PowerController land in a
-// later phase; NoopPowerController reports NOT_CONFIGURED until one is wired.
+// (discovered or manually enrolled) and then power-managed via a pluggable,
+// per-protocol PowerController (see ipmi.go, redfish.go); NoopPowerController
+// reports NOT_CONFIGURED for any protocol without a registered controller,
+// rather than silently no-op-ing power requests.
 package baremetal
 
 import (
@@ -11,11 +12,14 @@ import (
 	"sync"
 
 	"github.com/talos-platform/talos-platform/internal/application/ports"
+	"github.com/talos-platform/talos-platform/internal/domain/machine"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
 )
 
 // PowerController performs out-of-band power operations against a machine's
-// BMC. Deliberately decoupled from Talos concerns (ADR-0007, §11).
+// BMC over one specific protocol. Deliberately decoupled from Talos concerns
+// (ADR-0007, §11); Provider dispatches to the controller registered for a
+// given machine's declared BMC protocol.
 type PowerController interface {
 	PowerOn(ctx context.Context, bmcAddress, credentialRef string) error
 	PowerOff(ctx context.Context, bmcAddress, credentialRef string) error
@@ -23,9 +27,9 @@ type PowerController interface {
 	Capability() shared.CapabilityState
 }
 
-// NoopPowerController is the default when no IPMI/Redfish backend is
-// configured; it reports NOT_CONFIGURED truthfully instead of silently
-// no-op-ing power requests.
+// NoopPowerController is the fallback for any BMC protocol without a
+// registered controller; it reports NOT_CONFIGURED truthfully instead of
+// silently no-op-ing power requests.
 type NoopPowerController struct{}
 
 func (NoopPowerController) PowerOn(context.Context, string, string) error {
@@ -44,6 +48,7 @@ func (NoopPowerController) Capability() shared.CapabilityState {
 // InventoryEntry is a registered physical machine, keyed by its management
 // (BMC or OS) address rather than a cloud-style instance ID.
 type InventoryEntry struct {
+	Protocol      machine.BMCProtocol
 	BMCAddress    string
 	CredentialRef string
 	ManagementIP  string
@@ -52,17 +57,29 @@ type InventoryEntry struct {
 // Provider is the bare-metal InfrastructureProvider. It never creates or
 // destroys physical hardware: ProvisionMachine registers an already-existing
 // machine into inventory, and DeleteMachine removes it from inventory only.
+// Power operations dispatch to the PowerController registered for each
+// machine's own declared protocol — a single site's inventory can mix IPMI
+// and Redfish machines.
 type Provider struct {
-	power PowerController
+	controllers map[machine.BMCProtocol]PowerController
 
 	mu        sync.RWMutex
 	inventory map[string]InventoryEntry
 }
 
-// NewProvider constructs a bare-metal provider. Pass NoopPowerController{}
-// until an IPMI/Redfish implementation is configured.
-func NewProvider(power PowerController) *Provider {
-	return &Provider{power: power, inventory: make(map[string]InventoryEntry)}
+// NewProvider constructs a bare-metal provider from a protocol -> controller
+// registry. A protocol with no entry (or an explicitly nil one) falls back
+// to NoopPowerController, so an unconfigured protocol fails loudly
+// (NOT_CONFIGURED) rather than silently.
+func NewProvider(controllers map[machine.BMCProtocol]PowerController) *Provider {
+	return &Provider{controllers: controllers, inventory: make(map[string]InventoryEntry)}
+}
+
+func (p *Provider) controllerFor(protocol machine.BMCProtocol) PowerController {
+	if c, ok := p.controllers[protocol]; ok && c != nil {
+		return c
+	}
+	return NoopPowerController{}
 }
 
 // Register enrolls a physical machine discovered out-of-band (e.g. via a PXE
@@ -123,7 +140,7 @@ func (p *Provider) PowerOn(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return p.power.PowerOn(ctx, e.BMCAddress, e.CredentialRef)
+	return p.controllerFor(e.Protocol).PowerOn(ctx, e.BMCAddress, e.CredentialRef)
 }
 
 func (p *Provider) PowerOff(ctx context.Context, id string) error {
@@ -131,7 +148,7 @@ func (p *Provider) PowerOff(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return p.power.PowerOff(ctx, e.BMCAddress, e.CredentialRef)
+	return p.controllerFor(e.Protocol).PowerOff(ctx, e.BMCAddress, e.CredentialRef)
 }
 
 func (p *Provider) Reboot(ctx context.Context, id string) error {
@@ -139,7 +156,7 @@ func (p *Provider) Reboot(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return p.power.Reboot(ctx, e.BMCAddress, e.CredentialRef)
+	return p.controllerFor(e.Protocol).Reboot(ctx, e.BMCAddress, e.CredentialRef)
 }
 
 func (p *Provider) GetMachineStatus(_ context.Context, id string) (ports.MachineStatusInfra, error) {
@@ -150,11 +167,21 @@ func (p *Provider) GetMachineStatus(_ context.Context, id string) (ports.Machine
 	return ports.MachineStatusInfra{Exists: true, PowerOn: true}, nil
 }
 
+// Capability reports SupportsPowerControl true if at least one registered
+// protocol controller is actually available — a mixed inventory (e.g. some
+// IPMI machines configured, Redfish not yet) is still meaningfully usable.
 func (p *Provider) Capability() ports.ProviderCapability {
+	powerAvailable := false
+	for _, c := range p.controllers {
+		if c != nil && c.Capability() == shared.CapabilityAvailable {
+			powerAvailable = true
+			break
+		}
+	}
 	return ports.ProviderCapability{
 		State:                shared.CapabilityAvailable,
 		SupportsDiscovery:    true,
 		SupportsProvision:    false,
-		SupportsPowerControl: p.power.Capability() == shared.CapabilityAvailable,
+		SupportsPowerControl: powerAvailable,
 	}
 }

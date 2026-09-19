@@ -19,7 +19,8 @@ client over it) — never direct database or Talos access:
 | View cluster health | `GET /api/v1/clusters/{id}/health` |
 | View cluster nodes | `GET /api/v1/clusters/{id}/nodes` |
 | View GitOps/Argo CD status | `GET /api/v1/clusters/{id}/gitops` |
-| Reboot a machine | `POST /api/v1/machines/{id}/reboot` |
+| Reboot a machine (graceful, via Talos) | `POST /api/v1/machines/{id}/reboot` |
+| Hard power on/off/cycle a machine (via BMC/hypervisor) | `POST /api/v1/machines/{id}/power/{on,off,cycle}` |
 | Upgrade a machine's Talos version | `POST /api/v1/machines/{id}/upgrade` |
 | Upgrade a cluster | `POST /api/v1/clusters/{id}/upgrade` |
 | Scale a worker pool | `POST /api/v1/clusters/{id}/scale` |

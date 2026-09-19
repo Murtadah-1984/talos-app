@@ -8,13 +8,13 @@ export function Machines() {
   const { data: machines, error, loading, reload } = useApiGet<Machine[]>('/api/v1/machines')
   const [busy, setBusy] = useState<string | null>(null)
 
-  async function reboot(id: string) {
+  async function runAction(id: string, label: string, path: string) {
     setBusy(id)
     try {
-      await api.post(`/api/v1/machines/${id}/reboot`)
+      await api.post(`/api/v1/machines/${id}${path}`)
       reload()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Reboot failed')
+      window.alert(err instanceof Error ? err.message : `${label} failed`)
     } finally {
       setBusy(null)
     }
@@ -27,9 +27,7 @@ export function Machines() {
 
       {loading && <p>Loading…</p>}
       {error && <p className="error">{error}</p>}
-      {machines && machines.length === 0 && (
-        <p className="empty-state">No machines discovered yet.</p>
-      )}
+      {machines && machines.length === 0 && <p className="empty-state">No machines discovered yet.</p>}
       {machines && machines.length > 0 && (
         <table className="data-table">
           <thead>
@@ -55,9 +53,28 @@ export function Machines() {
                 <td>{m.KubernetesVersion}</td>
                 <td>{m.ManagementIP}</td>
                 <td>
-                  <button type="button" disabled={busy === m.ID} onClick={() => reboot(m.ID)}>
-                    {busy === m.ID ? 'Rebooting…' : 'Reboot'}
-                  </button>
+                  <div className="inline-form">
+                    <button
+                      type="button"
+                      disabled={busy === m.ID}
+                      onClick={() => runAction(m.ID, 'Reboot', '/reboot')}
+                      title="Ask Talos to reboot the OS gracefully"
+                    >
+                      {busy === m.ID ? '…' : 'Reboot'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy === m.ID}
+                      onClick={() => {
+                        if (window.confirm(`Hard power-cycle ${m.Hostname} via its BMC/hypervisor? This bypasses the OS.`)) {
+                          runAction(m.ID, 'Power cycle', '/power/cycle')
+                        }
+                      }}
+                      title="Force a hard reset via the infrastructure provider (BMC/hypervisor) — works even if the OS is unresponsive"
+                    >
+                      Power Cycle
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
