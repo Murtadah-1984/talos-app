@@ -1,13 +1,18 @@
 // Package clusterservice implements the cluster lifecycle use cases exposed
 // by the REST API and CLI (§8, §9, §17, §27). It orchestrates the domain
-// model and the workflow engine; it never talks to Talos/Git/Argo CD/CAPI
-// directly (ADR-0001..0005) — that happens inside workflow steps.
+// model and the workflow engine for declarative desired-state changes
+// (provision/upgrade/scale/delete all go through a workflow — ADR-0001..0005).
+// The one exception is TriggerSync: an explicit, imperative "sync now"
+// request is not a desired-state change (Argo CD's sync policy already
+// governs that), so it calls ports.ArgoCDClient directly here, the same way
+// machineservice calls ports.TalosClient directly for reboot/upgrade.
 package clusterservice
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/cluster"
 	"github.com/talos-platform/talos-platform/internal/domain/gitops"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
@@ -25,10 +30,11 @@ type Service struct {
 	clusters  cluster.Repository
 	gitops    gitops.Repositories
 	workflows WorkflowEnqueuer
+	argocd    ports.ArgoCDClient
 }
 
-func New(clusters cluster.Repository, gitopsRepo gitops.Repositories, workflows WorkflowEnqueuer) *Service {
-	return &Service{clusters: clusters, gitops: gitopsRepo, workflows: workflows}
+func New(clusters cluster.Repository, gitopsRepo gitops.Repositories, workflows WorkflowEnqueuer, argocd ports.ArgoCDClient) *Service {
+	return &Service{clusters: clusters, gitops: gitopsRepo, workflows: workflows, argocd: argocd}
 }
 
 // CreateInput is the payload for creating a new cluster in DRAFT state,
@@ -234,4 +240,23 @@ func (s *Service) GitOpsStatus(ctx context.Context, clusterID shared.ID) (*GitOp
 		return nil, fmt.Errorf("loading change sets: %w", err)
 	}
 	return &GitOpsStatus{Applications: apps, ChangeSets: changes}, nil
+}
+
+// TriggerSync requests an immediate Argo CD sync for the cluster's
+// Application (§4 "trigger synchronization where appropriate"). This is an
+// imperative, operator-requested action, not a desired-state change — Argo
+// CD's own sync policy (automated or manual) continues to govern steady
+// state regardless.
+func (s *Service) TriggerSync(ctx context.Context, clusterID shared.ID) error {
+	c, err := s.clusters.Get(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	if !c.Spec.ArgoCD.Enabled {
+		return fmt.Errorf("%w: cluster %s does not have Argo CD enabled", shared.ErrInvalidInput, c.Name)
+	}
+	if err := s.argocd.Sync(ctx, c.Name); err != nil {
+		return fmt.Errorf("triggering sync for cluster %s: %w", c.Name, err)
+	}
+	return nil
 }

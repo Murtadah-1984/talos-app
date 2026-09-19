@@ -80,7 +80,11 @@ func main() {
 		logger.Error("constructing GitHub client", "error", err)
 		os.Exit(1)
 	}
-	argoClient := argocd.NewMockClient()
+	argoClient, err := argocd.NewFromConfig(cfg.ArgoCDAdapterMode, cfg.ArgoCDServerURL, cfg.ArgoCDToken)
+	if err != nil {
+		logger.Error("constructing Argo CD client", "error", err)
+		os.Exit(1)
+	}
 	capiProvider := clusterapi.NewMockProvider()
 
 	deps := workflows.ClusterProvisionDeps{

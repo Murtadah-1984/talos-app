@@ -107,7 +107,11 @@ func main() {
 		logger.Error("constructing GitHub client", "error", err)
 		os.Exit(1)
 	}
-	argoClient := argocd.NewMockClient()
+	argoClient, err := argocd.NewFromConfig(cfg.ArgoCDAdapterMode, cfg.ArgoCDServerURL, cfg.ArgoCDToken)
+	if err != nil {
+		logger.Error("constructing Argo CD client", "error", err)
+		os.Exit(1)
+	}
 	capiProvider := clusterapi.NewMockProvider()
 
 	workflowDeps := workflows.ClusterProvisionDeps{
@@ -126,7 +130,7 @@ func main() {
 	defer engine.Stop()
 
 	authSvc := authservice.New(users, issuer)
-	clusterSvc := clusterservice.New(clusters, gitopsRepo, engine)
+	clusterSvc := clusterservice.New(clusters, gitopsRepo, engine, argoClient)
 	machineSvc := machineservice.New(machines, operations, talosClient)
 
 	metrics := observability.NewMetrics()

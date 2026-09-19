@@ -85,9 +85,37 @@ testable — no phase depends on unfinished work from a later phase to run.
 
 ## Phase 4 — Argo CD
 
-- [ ] `ArgoCDClient` port + real client
-- [ ] Application/ApplicationSet discovery, sync/health status, drift detection
-- [ ] Sync triggering, rollback via Git revert, sync history
+- [x] `ArgoCDClient` port + real client (`internal/integrations/argocd/client.go`) — a
+      hand-rolled REST client against Argo CD's documented HTTP API
+      (`/api/v1/applications`), deliberately not the official Argo CD Go SDK (which
+      pulls in most of k8s client-go for a read-mostly status/sync client). Selected via
+      `PLATFORM_ARGOCD_ADAPTER=real` + `PLATFORM_ARGOCD_SERVER_URL` +
+      `PLATFORM_ARGOCD_TOKEN` (default `mock`).
+- [x] Application discovery, sync/health status, sync history — `ListApplications`,
+      `GetApplication`, `GetHistory`.
+- [x] Drift/health detection wired into `platform-scheduler`'s reconciliation loop: for
+      every Argo-CD-enabled cluster, it now calls `GetApplication`, refreshes the
+      `gitops.ArgoApplication` cache the cluster GitOps tab reads, and fires/resolves
+      `audit.Alert`s ("GitOps drift detected", "Argo CD application unhealthy") — a
+      pure visibility pass, per ADR-0003.
+- [x] Sync triggering — `POST /api/v1/clusters/{id}/sync` (`ClusterService.TriggerSync`),
+      the CLI's `talos-platform gitops sync`, and a "Trigger Sync Now" button on the
+      cluster GitOps tab. This is the one place `clusterservice` calls an integration
+      port directly rather than going through a workflow — deliberately, since it's an
+      imperative "sync now" request, not a desired-state change (mirrors how
+      `machineservice` calls `TalosClient` directly for reboot/upgrade).
+- [x] Fixed a real bug found while wiring this up: the `alerts` table's unique
+      constraint included `status`, so a FIRING -> RESOLVED transition inserted a
+      second row instead of updating the alert in place, leaving stale FIRING rows
+      forever. Migration `0005` corrects the constraint to `(target_kind, target_id,
+      title)`, and `UpsertAlert` now updates `fired_at`/`resolved_at` correctly across
+      re-fire/resolve cycles.
+- [ ] **ApplicationSet discovery** is not implemented — only individual Applications.
+- [ ] **Rollback via Git revert** (§18, §20) is not implemented. A correct
+      implementation needs the commit SHA a change produced (not currently persisted
+      on `gitops.ChangeSet`) and a way to resolve a commit's parent tree, then
+      re-commit the reverted file contents as a new change — real work, deliberately
+      not force-fit into this pass. Tracked as a follow-up, not faked.
 
 ## Phase 5 — Cluster API
 

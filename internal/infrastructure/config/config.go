@@ -49,6 +49,12 @@ type Config struct {
 	// exists for that).
 	GitHubToken string
 
+	// ArgoCDServerURL/ArgoCDToken configure the real Argo CD REST client
+	// when ArgoCDAdapterMode is "real" — same bootstrapping simplification
+	// as TalosConfigFile/GitHubToken.
+	ArgoCDServerURL string
+	ArgoCDToken     string
+
 	SecretStoreBackend string // "local" (dev, AES-GCM at rest) or "vault"
 	SecretStoreKeyHex  string // 32-byte hex key for the local backend
 }
@@ -118,6 +124,8 @@ func Load() (Config, error) {
 		ProxmoxAdapterMode:    getenv("PLATFORM_PROXMOX_ADAPTER", "mock"),
 		TalosConfigFile:       getenv("PLATFORM_TALOS_CONFIG_FILE", ""),
 		GitHubToken:           getenv("PLATFORM_GITHUB_TOKEN", ""),
+		ArgoCDServerURL:       getenv("PLATFORM_ARGOCD_SERVER_URL", ""),
+		ArgoCDToken:           getenv("PLATFORM_ARGOCD_TOKEN", ""),
 		SecretStoreBackend:    getenv("PLATFORM_SECRETSTORE_BACKEND", "local"),
 		SecretStoreKeyHex:     getenv("PLATFORM_SECRETSTORE_KEY_HEX", ""),
 	}
@@ -136,6 +144,12 @@ func Load() (Config, error) {
 	}
 	if cfg.GitHubAdapterMode == "real" && cfg.GitHubToken == "" {
 		return Config{}, fmt.Errorf("PLATFORM_GITHUB_ADAPTER=real requires PLATFORM_GITHUB_TOKEN")
+	}
+	if cfg.ArgoCDAdapterMode != "mock" && cfg.ArgoCDAdapterMode != "real" {
+		return Config{}, fmt.Errorf("invalid PLATFORM_ARGOCD_ADAPTER %q: must be \"mock\" or \"real\"", cfg.ArgoCDAdapterMode)
+	}
+	if cfg.ArgoCDAdapterMode == "real" && (cfg.ArgoCDServerURL == "" || cfg.ArgoCDToken == "") {
+		return Config{}, fmt.Errorf("PLATFORM_ARGOCD_ADAPTER=real requires PLATFORM_ARGOCD_SERVER_URL and PLATFORM_ARGOCD_TOKEN")
 	}
 	return cfg, nil
 }

@@ -177,6 +177,20 @@ func gitopsCmd(newClient func() *cli.Client) *cobra.Command {
 		},
 	})
 
+	cmd.AddCommand(&cobra.Command{
+		Use:   "sync [cluster-id]",
+		Short: "Trigger an immediate Argo CD sync for a cluster",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			var out any
+			if err := newClient().Post("/api/v1/clusters/"+args[0]+"/sync", nil, &out); err != nil {
+				return err
+			}
+			printJSON(out)
+			return nil
+		},
+	})
+
 	return cmd
 }
 

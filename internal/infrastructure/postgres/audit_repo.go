@@ -140,11 +140,24 @@ func (r *AuditRepository) UpsertAlert(ctx context.Context, a *audit.Alert) error
 	if a.ID == (shared.ID{}) {
 		a.ID = shared.NewID()
 	}
+	// fired_at is preserved across repeated FIRING upserts (it marks when
+	// the condition first started, not the last time it was observed) and
+	// only reset when an alert transitions from a non-firing status back to
+	// FIRING. resolved_at mirrors the current status rather than whatever
+	// caller passed in, so a re-fired alert doesn't keep a stale timestamp.
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO alerts (id, target_kind, target_id, severity, status, title, detail, fired_at, resolved_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		 ON CONFLICT (target_kind, target_id, title, status)
-		 DO UPDATE SET severity = EXCLUDED.severity, detail = EXCLUDED.detail, resolved_at = EXCLUDED.resolved_at`,
+		 ON CONFLICT (target_kind, target_id, title)
+		 DO UPDATE SET
+			severity = EXCLUDED.severity,
+			status = EXCLUDED.status,
+			detail = EXCLUDED.detail,
+			fired_at = CASE
+				WHEN EXCLUDED.status = 'FIRING' AND alerts.status != 'FIRING' THEN EXCLUDED.fired_at
+				ELSE alerts.fired_at
+			END,
+			resolved_at = CASE WHEN EXCLUDED.status = 'RESOLVED' THEN EXCLUDED.resolved_at ELSE NULL END`,
 		a.ID, a.TargetKind, a.TargetID, a.Severity, a.Status, a.Title, a.Detail, a.FiredAt, a.ResolvedAt)
 	if err != nil {
 		return fmt.Errorf("upserting alert: %w", err)

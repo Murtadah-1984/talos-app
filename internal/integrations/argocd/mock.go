@@ -1,6 +1,6 @@
-// Package argocd implements the ports.ArgoCDClient adapter (ADR-0003). The
-// real client (Argo CD's REST/gRPC API) lands in Phase 4; this mock lets
-// sync-status/drift UI and workflows be built against the same interface.
+// Package argocd implements the ports.ArgoCDClient adapter (ADR-0003). This
+// file is the deterministic mock, used in local development and tests; see
+// client.go for the real REST-based implementation (Phase 4).
 package argocd
 
 import (
@@ -35,6 +35,18 @@ func (c *MockClient) Seed(name, namespace, project, revision string) {
 		SyncStatus:   gitops.SyncStatusSynced,
 		HealthStatus: gitops.HealthHealthy,
 		Revision:     revision,
+	}
+}
+
+// SetStatus overrides a previously-seeded Application's sync/health status,
+// so tests can simulate drift or degraded health without a live Argo CD
+// instance.
+func (c *MockClient) SetStatus(name string, sync gitops.ArgoCDSyncStatus, health gitops.ArgoCDHealthStatus) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if a, ok := c.apps[name]; ok {
+		a.SyncStatus = sync
+		a.HealthStatus = health
 	}
 }
 

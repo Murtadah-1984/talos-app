@@ -69,3 +69,17 @@ export PLATFORM_GITHUB_TOKEN=ghp_...   # a PAT or GitHub App installation token
 
 See [../gitops/README.md](../gitops/README.md) for what the real client does and
 what's still open (repository scaffolding, webhook-driven approval).
+
+## Argo CD: mock vs. real
+
+By default (`PLATFORM_ARGOCD_ADAPTER=mock`) sync-status reads and drift detection run
+against an in-memory stand-in. To point at a real Argo CD instance:
+
+```bash
+export PLATFORM_ARGOCD_ADAPTER=real
+export PLATFORM_ARGOCD_SERVER_URL=https://argocd.example.com
+export PLATFORM_ARGOCD_TOKEN=...   # `argocd account generate-token`, or a session JWT
+```
+
+See [../argocd/README.md](../argocd/README.md) for what the real client does and what's
+still open (ApplicationSet discovery, Git-revert rollback).

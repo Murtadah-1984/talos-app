@@ -250,6 +250,19 @@ function OperationsTab({ cluster, onChanged }: { cluster: Cluster; onChanged: ()
         </div>
       </section>
 
+      {cluster.Spec.ArgoCD.Enabled && (
+        <section>
+          <h3>GitOps Sync</h3>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => run('Sync', () => api.post(`/api/v1/clusters/${cluster.ID}/sync`))}
+          >
+            Trigger Sync Now
+          </button>
+        </section>
+      )}
+
       <section>
         <h3>Destroy</h3>
         <button

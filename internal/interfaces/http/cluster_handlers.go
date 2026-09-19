@@ -199,6 +199,23 @@ func mountClusters(r chi.Router, d Deps) {
 			}
 			writeJSON(w, http.StatusOK, status)
 		})
+
+		sub.Post("/{id}/sync", func(w http.ResponseWriter, r *http.Request) {
+			id, err := shared.ParseID(chi.URLParam(r, "id"))
+			if err != nil {
+				writeError(w, shared.ErrInvalidInput)
+				return
+			}
+			if _, err := requireRole(r, d, user.ResourceCluster, id, user.RoleOperator); err != nil {
+				writeError(w, err)
+				return
+			}
+			if err := d.ClusterService.TriggerSync(r.Context(), id); err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "sync triggered"})
+		})
 	})
 }
 

@@ -23,6 +23,7 @@ client over it) — never direct database or Talos access:
 | Upgrade a machine's Talos version | `POST /api/v1/machines/{id}/upgrade` |
 | Upgrade a cluster | `POST /api/v1/clusters/{id}/upgrade` |
 | Scale a worker pool | `POST /api/v1/clusters/{id}/scale` |
+| Trigger an Argo CD sync now | `POST /api/v1/clusters/{id}/sync` |
 | Destroy a cluster | `DELETE /api/v1/clusters/{id}` |
 
 Destructive operations (`upgrade`, `scale`, `delete`) require at least the
