@@ -77,6 +77,11 @@ func (c *MockClient) ApplyMachineConfiguration(_ context.Context, endpoint strin
 	return nil
 }
 
+func (c *MockClient) ApplyMaintenanceConfiguration(_ context.Context, endpoint, _, _ string) error {
+	c.machine(endpoint) // ensure it exists, simulating the node having joined
+	return nil
+}
+
 func (c *MockClient) Reboot(_ context.Context, endpoint string) error {
 	m := c.machine(endpoint)
 	c.mu.Lock()
@@ -133,6 +138,19 @@ func (c *MockClient) GetNetworkInfo(_ context.Context, endpoint string) (ports.N
 func (c *MockClient) GetEtcdHealth(_ context.Context, endpoint string) (ports.EtcdHealth, error) {
 	m := c.machine(endpoint)
 	return ports.EtcdHealth{MemberID: endpoint, Healthy: m.healthy, IsLeader: false}, nil
+}
+
+// DiscoverClusterMembers reports endpoint itself as the sole discovered
+// member — the mock has no notion of a multi-node cluster topology beyond
+// the single endpoint it was asked about.
+func (c *MockClient) DiscoverClusterMembers(_ context.Context, endpoint string) ([]ports.ClusterMember, error) {
+	m := c.machine(endpoint)
+	return []ports.ClusterMember{{
+		Hostname:        endpoint,
+		Addresses:       []string{"10.0.0.10"},
+		ControlPlane:    true,
+		OperatingSystem: "Talos (" + m.talosVersion + ")",
+	}}, nil
 }
 
 func (c *MockClient) Capability() shared.CapabilityState {

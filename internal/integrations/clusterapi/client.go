@@ -65,14 +65,19 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 }
 
 var (
-	clusterGVR           = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}
-	machineDeploymentGVR = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinedeployments"}
-	machineGVR           = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machines"}
+	clusterGVR            = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}
+	machineDeploymentGVR  = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinedeployments"}
+	machineGVR            = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machines"}
+	machineHealthCheckGVR = schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinehealthchecks"}
 )
 
 // GetClusterStatus reads the Cluster resource and every MachineDeployment/
-// Machine labeled for it (the standard `cluster.x-k8s.io/cluster-name`
-// label CAPI itself applies) from the management cluster, read-only.
+// Machine/MachineHealthCheck labeled for it (the standard
+// `cluster.x-k8s.io/cluster-name` label CAPI itself applies) from the
+// management cluster, read-only. MachineHealthCheck is included so an
+// operator can see remediation CAPI's own MachineHealthCheck controller is
+// performing (replacing unhealthy Machines) without this platform ever
+// initiating or duplicating that remediation itself (ADR-0002).
 func (c *Client) GetClusterStatus(ctx context.Context, namespace, name string) ([]ports.CAPIResourceStatus, error) {
 	var out []ports.CAPIResourceStatus
 
@@ -100,7 +105,34 @@ func (c *Client) GetClusterStatus(ctx context.Context, namespace, name string) (
 		out = append(out, resourceStatus("Machine", &machines.Items[i]))
 	}
 
+	mhcs, err := c.dyn.Resource(machineHealthCheckGVR).Namespace(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, fmt.Errorf("listing MachineHealthChecks for cluster %s: %w", name, err)
+	}
+	for i := range mhcs.Items {
+		out = append(out, machineHealthCheckStatus(&mhcs.Items[i]))
+	}
+
 	return out, nil
+}
+
+// machineHealthCheckStatus maps a MachineHealthCheck's observed state.
+// Unlike other CAPI resources, MHC doesn't use a `status.phase` string or a
+// "Ready" condition — its own status fields (`currentHealthy`,
+// `expectedMachines`, `remediationsAllowed`) describe whether it is
+// currently allowed to remediate, which this maps onto the shared
+// CAPIResourceStatus.Ready/Phase shape rather than adding a bespoke type.
+func machineHealthCheckStatus(obj *unstructured.Unstructured) ports.CAPIResourceStatus {
+	currentHealthy, _, _ := unstructured.NestedInt64(obj.Object, "status", "currentHealthy")
+	expectedMachines, _, _ := unstructured.NestedInt64(obj.Object, "status", "expectedMachines")
+	remediationsAllowed, _, _ := unstructured.NestedInt64(obj.Object, "status", "remediationsAllowed")
+	return ports.CAPIResourceStatus{
+		Kind:      "MachineHealthCheck",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Phase:     fmt.Sprintf("healthy=%d/%d remediationsAllowed=%d", currentHealthy, expectedMachines, remediationsAllowed),
+		Ready:     currentHealthy == expectedMachines,
+	}
 }
 
 // resourceStatus maps any CAPI resource's observed state into

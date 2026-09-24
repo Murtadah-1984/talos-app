@@ -96,6 +96,67 @@ func TestRenderClusterManifests_WorkersYAMLHasOneDocumentPerPool(t *testing.T) {
 	}
 }
 
+func TestRenderRepositoryScaffold_ProducesExpectedFileSet(t *testing.T) {
+	files, err := gitopsrender.RenderRepositoryScaffold(gitopsrender.RepositoryScaffoldInput{
+		RepoURL:       "https://github.com/acme/gitops.git",
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("RenderRepositoryScaffold: %v", err)
+	}
+
+	wantPaths := []string{
+		"README.md",
+		"app-of-apps.yaml",
+		"infrastructure/README.md",
+		"applications/README.md",
+	}
+	if len(files) != len(wantPaths) {
+		t.Fatalf("expected %d files, got %d: %+v", len(wantPaths), len(files), files)
+	}
+	for i, want := range wantPaths {
+		if files[i].Path != want {
+			t.Errorf("file %d: expected path %q, got %q", i, want, files[i].Path)
+		}
+		if len(files[i].Content) == 0 {
+			t.Errorf("file %d (%s): content is empty", i, files[i].Path)
+		}
+	}
+
+	var appOfApps string
+	for _, f := range files {
+		if f.Path == "app-of-apps.yaml" {
+			appOfApps = string(f.Content)
+		}
+	}
+	if !strings.Contains(appOfApps, "path: applications") {
+		t.Errorf("expected app-of-apps.yaml to point at the applications/ directory, got:\n%s", appOfApps)
+	}
+	if !strings.Contains(appOfApps, "repoURL: https://github.com/acme/gitops.git") {
+		t.Errorf("expected app-of-apps.yaml to reference the repo URL, got:\n%s", appOfApps)
+	}
+}
+
+func TestRenderRepositoryScaffold_IsDeterministic(t *testing.T) {
+	in := gitopsrender.RepositoryScaffoldInput{RepoURL: "https://github.com/acme/gitops.git", DefaultBranch: "main"}
+	first, err := gitopsrender.RenderRepositoryScaffold(in)
+	if err != nil {
+		t.Fatalf("first render: %v", err)
+	}
+	second, err := gitopsrender.RenderRepositoryScaffold(in)
+	if err != nil {
+		t.Fatalf("second render: %v", err)
+	}
+	if len(first) != len(second) {
+		t.Fatalf("file count differs between renders: %d vs %d", len(first), len(second))
+	}
+	for i := range first {
+		if string(first[i].Content) != string(second[i].Content) {
+			t.Errorf("file %s rendered differently on repeated calls", first[i].Path)
+		}
+	}
+}
+
 func TestRenderClusterManifests_IsDeterministic(t *testing.T) {
 	in := gitopsrender.Input{Cluster: testCluster(), GitOpsPath: "clusters/basra-prod"}
 	first, err := gitopsrender.RenderClusterManifests(in)

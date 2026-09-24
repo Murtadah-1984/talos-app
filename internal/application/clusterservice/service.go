@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/talos-platform/talos-platform/internal/application/gitopsrender"
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/cluster"
 	"github.com/talos-platform/talos-platform/internal/domain/gitops"
@@ -258,6 +259,42 @@ func (s *Service) ListApplicationSets(ctx context.Context, clusterID shared.ID) 
 		return nil, fmt.Errorf("listing argo application sets for cluster %s: %w", c.Name, err)
 	}
 	return sets, nil
+}
+
+// ScaffoldRepository bootstraps a brand-new gitops/ repository's top-level
+// layout (§3) — README, infrastructure/, applications/, and a root
+// App-of-Apps Application — by committing it straight to the repository's
+// default branch. Unlike a cluster change, this doesn't go through a PR/
+// approval gate: there is no existing content to conflict with or review
+// yet, the same reasoning `git init` + an initial commit needs no review.
+// The repository record itself (owner/name/defaultBranch) must already
+// exist (gitops.Repositories.CreateRepository) and the repository must
+// already have at least one commit on its default branch (e.g. created
+// with a README) — Commit resolves the branch's current tip to build the
+// scaffold commit's tree from, the same precondition every other commit
+// path in this codebase already has.
+func (s *Service) ScaffoldRepository(ctx context.Context, repositoryID shared.ID) error {
+	repo, err := s.gitops.GetRepository(ctx, repositoryID)
+	if err != nil {
+		return fmt.Errorf("loading repository: %w", err)
+	}
+
+	files, err := gitopsrender.RenderRepositoryScaffold(gitopsrender.RepositoryScaffoldInput{
+		RepoURL:       fmt.Sprintf("https://github.com/%s/%s.git", repo.Owner, repo.Name),
+		DefaultBranch: repo.DefaultBranch,
+	})
+	if err != nil {
+		return fmt.Errorf("rendering repository scaffold: %w", err)
+	}
+
+	if _, err := s.git.Commit(ctx, ports.CommitRequest{
+		Owner: repo.Owner, Repo: repo.Name, Branch: repo.DefaultBranch,
+		Message: "Bootstrap GitOps repository layout",
+		Files:   files,
+	}); err != nil {
+		return fmt.Errorf("committing repository scaffold: %w", err)
+	}
+	return nil
 }
 
 // TriggerSync requests an immediate Argo CD sync for the cluster's

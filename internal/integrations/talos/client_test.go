@@ -52,6 +52,16 @@ func TestApplyModeFor(t *testing.T) {
 	}
 }
 
+func TestMaintenanceFingerprints(t *testing.T) {
+	if got := maintenanceFingerprints(""); got != nil {
+		t.Errorf("expected nil fingerprints for an empty string, got %v", got)
+	}
+	got := maintenanceFingerprints("AA:BB:CC")
+	if len(got) != 1 || got[0] != "AA:BB:CC" {
+		t.Errorf("unexpected fingerprints: %v", got)
+	}
+}
+
 // TestClient_AgainstLiveEndpoint is a real integration test against a
 // running Talos node, per the Phase 2 roadmap item "integration tests
 // against a real or emulated Talos endpoint". It is skipped unless

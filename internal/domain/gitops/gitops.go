@@ -130,6 +130,10 @@ type Repositories interface {
 	CreateChangeSet(ctx context.Context, c *ChangeSet) error
 	UpdateChangeSet(ctx context.Context, c *ChangeSet) error
 	GetChangeSet(ctx context.Context, id shared.ID) (*ChangeSet, error)
+	// GetChangeSetByPullRequestURL resolves the change set a GitHub webhook
+	// event's pull request belongs to (§4 webhook-driven approval gate), so
+	// the workflow that's awaiting that PR's merge can be found and resumed.
+	GetChangeSetByPullRequestURL(ctx context.Context, url string) (*ChangeSet, error)
 	ListChangeSetsForCluster(ctx context.Context, clusterID shared.ID, page shared.Page) ([]*ChangeSet, error)
 
 	UpsertArgoApplication(ctx context.Context, a *ArgoApplication) error

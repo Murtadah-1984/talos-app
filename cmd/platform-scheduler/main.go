@@ -17,6 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/audit"
 	"github.com/talos-platform/talos-platform/internal/domain/cluster"
@@ -45,6 +48,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	shutdownTracing, err := observability.InitTracing(ctx, "platform-scheduler", cfg.Observability.OTLPEndpoint, cfg.Observability.TracingEnabled)
+	if err != nil {
+		logger.Error("initializing tracing", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
+
+	shutdownMetrics, err := observability.InitMetrics(ctx, "platform-scheduler", cfg.Observability.OTLPEndpoint, cfg.Observability.TracingEnabled)
+	if err != nil {
+		logger.Error("initializing metrics", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownMetrics(context.Background()) }()
+
 	if err := postgres.Migrate(cfg.Postgres.DSN, migrations.FS, "."); err != nil {
 		logger.Error("applying database migrations", "error", err)
 		os.Exit(1)
@@ -68,7 +85,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := &reconciler{clusters: clusters, gitops: gitopsRepo, audit: auditRepo, argo: argoClient, metrics: metrics, logger: logger}
+	r := &reconciler{clusters: clusters, gitops: gitopsRepo, audit: auditRepo, argo: argoClient, metrics: metrics, logger: logger, tracer: observability.Tracer("platform-scheduler")}
 
 	redisClient := redis.New(cfg.Redis.Addr)
 	defer func() { _ = redisClient.Close() }()
@@ -108,6 +125,7 @@ type reconciler struct {
 	argo     ports.ArgoCDClient
 	metrics  *observability.Metrics
 	logger   *slog.Logger
+	tracer   trace.Tracer
 }
 
 // run keeps cluster_health gauges, the cached Argo CD Application status
@@ -115,8 +133,13 @@ type reconciler struct {
 // §31). It is a visibility pass only — Argo CD remains the system that
 // actually reconciles anything (ADR-0003).
 func (r *reconciler) run(ctx context.Context) {
+	ctx, span := r.tracer.Start(ctx, "scheduler.reconcile")
+	defer span.End()
+
 	list, err := r.clusters.List(ctx, cluster.Filter{}, shared.Page{Limit: 500})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		r.logger.Error("listing clusters for reconciliation", "error", err)
 		return
 	}

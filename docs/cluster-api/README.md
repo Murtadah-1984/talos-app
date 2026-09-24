@@ -35,8 +35,12 @@ specific infra CRD shape would be more misleading than useful.
 
 `GetClusterStatus` uses a real `k8s.io/client-go` dynamic client against the CAPI
 management cluster's Kubernetes API: it reads the `Cluster` resource and every
-`MachineDeployment`/`Machine` labeled `cluster.x-k8s.io/cluster-name=<name>` (the
-label CAPI itself applies), read-only. It never writes anything.
+`MachineDeployment`/`Machine`/`MachineHealthCheck` labeled
+`cluster.x-k8s.io/cluster-name=<name>` (the label CAPI itself applies), read-only. It
+never writes anything. `MachineHealthCheck` status (`currentHealthy`/
+`expectedMachines`/`remediationsAllowed`) surfaces whether CAPI's own MHC controller
+is currently allowed to remediate — the platform observes this, it never triggers
+remediation itself (ADR-0002).
 
 ## Where this gets called from
 
@@ -49,9 +53,9 @@ clusters skip this path entirely and use `TalosClient` directly instead (ADR-000
 
 ## What's not built yet
 
-- **Remediation** — Machine-level readiness is observed, but the platform doesn't
-  orchestrate replacing an unhealthy machine (CAPI's own MachineHealthCheck controller
-  would normally own that; this platform doesn't yet surface a "replace this machine"
-  action).
+- **Remediation orchestration** — MachineHealthCheck status is observed (see above),
+  but the platform doesn't and won't initiate replacing an unhealthy machine itself;
+  that's CAPI's own MHC controller's job (ADR-0002). There is no platform-initiated
+  "replace this machine" action, by design.
 - **ApplicationSet-style multi-cluster templating** is out of scope here — see
   [../argocd/README.md](../argocd/README.md).

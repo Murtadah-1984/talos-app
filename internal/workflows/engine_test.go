@@ -230,3 +230,104 @@ func TestEngine_StepFailure_MovesToNeedsAttention(t *testing.T) {
 		t.Fatal("FinishedAt should not be before StartedAt")
 	}
 }
+
+func TestEngine_ErrAwaitingApproval_PausesThenResumeReRunsSameStep(t *testing.T) {
+	repo := newFakeRepo()
+	broker := inprocess.NewBroker()
+	engine := workflows.NewEngine(repo, broker, nil)
+
+	var approved bool
+	var attempts int
+	engine.Register(workflows.Definition{
+		Type: "TEST_WORKFLOW",
+		Steps: []workflows.StepDefinition{
+			{Name: "await-approval", Run: func(_ context.Context, _ *workflow.Workflow) (map[string]any, error) {
+				attempts++
+				if !approved {
+					return nil, workflows.ErrAwaitingApproval
+				}
+				return map[string]any{"approved": true}, nil
+			}},
+			{Name: "after-approval", Run: func(_ context.Context, _ *workflow.Workflow) (map[string]any, error) {
+				return nil, nil
+			}},
+		},
+	})
+	if err := engine.StartConsuming(context.Background()); err != nil {
+		t.Fatalf("StartConsuming: %v", err)
+	}
+	defer engine.Stop()
+
+	wf, err := engine.Enqueue(context.Background(), "TEST_WORKFLOW", "awaiting-key", nil, nil, nil, shared.NewID())
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	got, steps, err := engine.Get(context.Background(), wf.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != workflow.StatusAwaitingApproval {
+		t.Fatalf("expected AWAITING_APPROVAL, got %s", got.Status)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected the step to have run once, ran %d times", attempts)
+	}
+	if len(steps) != 2 || steps[0].Status != workflow.StatusPending {
+		t.Fatalf("expected the paused step to be reverted to PENDING (not FAILED), got %+v", steps[0])
+	}
+
+	// Resuming before the condition is actually satisfied should just pause
+	// again, not panic or lose the workflow.
+	approved = false
+	if err := engine.Resume(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Resume (still not approved): %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected the step to have run twice, ran %d times", attempts)
+	}
+
+	approved = true
+	if err := engine.Resume(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	got, _, err = engine.Get(context.Background(), wf.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != workflow.StatusSucceeded {
+		t.Fatalf("expected the workflow to succeed after approval, got %s (error: %s)", got.Status, got.Error)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected the step to have run three times total, ran %d times", attempts)
+	}
+}
+
+func TestEngine_Resume_RejectsWorkflowNotAwaitingApproval(t *testing.T) {
+	repo := newFakeRepo()
+	broker := inprocess.NewBroker()
+	engine := workflows.NewEngine(repo, broker, nil)
+
+	engine.Register(workflows.Definition{
+		Type: "TEST_WORKFLOW",
+		Steps: []workflows.StepDefinition{
+			{Name: "only-step", Run: func(_ context.Context, _ *workflow.Workflow) (map[string]any, error) {
+				return nil, nil
+			}},
+		},
+	})
+	if err := engine.StartConsuming(context.Background()); err != nil {
+		t.Fatalf("StartConsuming: %v", err)
+	}
+	defer engine.Stop()
+
+	wf, err := engine.Enqueue(context.Background(), "TEST_WORKFLOW", "already-done-key", nil, nil, nil, shared.NewID())
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	if err := engine.Resume(context.Background(), wf.ID); err == nil {
+		t.Fatal("expected Resume to reject a workflow that already succeeded")
+	}
+}

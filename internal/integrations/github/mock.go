@@ -70,6 +70,11 @@ func (p *MockProvider) GetCommitParent(_ context.Context, _, _, sha string) (str
 	return parent, nil
 }
 
+// CreatePullRequest immediately marks the PR "merged", simulating a
+// dev/test environment where nothing requires human review — unlike the
+// real GitHub client, whose PRs start "open" and only become "merged" when
+// an actual human merges them (or something automated does on their
+// behalf), which is what the webhook-driven approval gate (§4) waits for.
 func (p *MockProvider) CreatePullRequest(_ context.Context, req ports.PullRequestRequest) (ports.PullRequest, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -78,7 +83,7 @@ func (p *MockProvider) CreatePullRequest(_ context.Context, req ports.PullReques
 	pr := &ports.PullRequest{
 		Number: n,
 		URL:    fmt.Sprintf("https://github.com/%s/%s/pull/%d", req.Owner, req.Repo, n),
-		State:  "open",
+		State:  "merged",
 		Head:   req.Head,
 		Base:   req.Base,
 	}

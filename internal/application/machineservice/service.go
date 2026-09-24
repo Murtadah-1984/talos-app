@@ -42,6 +42,23 @@ func (s *Service) List(ctx context.Context, filter machine.Filter, page shared.P
 	return s.machines.List(ctx, filter, page)
 }
 
+// DiscoverClusterTopology infers an existing Talos cluster's membership
+// (control plane and worker nodes, DIRECT_TALOS mode) purely by querying one
+// already-reachable node — for onboarding a cluster the platform didn't
+// provision itself. This is a live read: it doesn't create machine or
+// cluster records, since importing discovered members as machine.Machine
+// rows needs a machine.Repository.Create/registration path this codebase
+// doesn't have yet (every existing machine record today comes from an
+// infrastructure provider's own ProvisionMachine call, which an externally
+// provisioned cluster's nodes never went through) — see docs/roadmap.md.
+func (s *Service) DiscoverClusterTopology(ctx context.Context, seedEndpoint string) ([]ports.ClusterMember, error) {
+	members, err := s.talos.DiscoverClusterMembers(ctx, seedEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("discovering cluster topology from %s: %w", seedEndpoint, err)
+	}
+	return members, nil
+}
+
 // Health queries the machine's live Talos health, distinct from the
 // persisted machine.Phase (§17, "View Health").
 func (s *Service) Health(ctx context.Context, id shared.ID) (ports.HealthStatus, error) {

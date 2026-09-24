@@ -162,6 +162,100 @@ type argoAutomatedSync struct {
 	SelfHeal bool `yaml:"selfHeal"`
 }
 
+// RepositoryScaffoldInput bundles what bootstrapping a brand-new gitops/
+// repository needs — nothing cluster-specific, since this runs once per
+// repository, before any cluster's subtree exists in it.
+type RepositoryScaffoldInput struct {
+	RepoURL       string // e.g. "https://github.com/acme/gitops.git"
+	DefaultBranch string
+}
+
+// RenderRepositoryScaffold produces the top-level gitops/ repository layout
+// (§3): a README, the infrastructure/ and applications/ directories (seeded
+// with a placeholder file each, since Git doesn't track empty directories),
+// and a root "App-of-Apps" Argo CD Application watching applications/ for
+// platform-wide Applications (monitoring, ingress controllers, and the
+// like — resources that aren't any one cluster's concern). Per-cluster
+// subtrees (clusters/<name>/...) are rendered separately by
+// RenderClusterManifests once this scaffold exists; this function is
+// intended to run at most once per repository, the first time a tenant
+// needs a gitops/ repo of their own and doesn't have one yet.
+//
+// It deliberately does not set up automatic per-cluster Application
+// discovery (e.g. an ApplicationSet with a git directory generator over
+// clusters/*) — that would make each cluster's own
+// clusters/<name>/argocd-application.yaml (already rendered by
+// RenderClusterManifests) redundant, a bigger redesign than "add the
+// missing top-level scaffolding" calls for. Each cluster's Application
+// still needs to reach Argo CD through the normal provisioning workflow.
+func RenderRepositoryScaffold(in RepositoryScaffoldInput) ([]ports.FileChange, error) {
+	appOfApps, err := marshal(argoApplicationDocument{
+		APIVersion: "argoproj.io/v1alpha1",
+		Kind:       "Application",
+		Metadata:   argoMetadata{Name: "app-of-apps", Namespace: "argocd"},
+		Spec: argoApplicationSpec{
+			Project: "default",
+			Source: argoSource{
+				RepoURL:        in.RepoURL,
+				Path:           "applications",
+				TargetRevision: in.DefaultBranch,
+			},
+			Destination: argoDestination{Server: "https://kubernetes.default.svc", Namespace: "argocd"},
+			SyncPolicy:  argoSyncPolicy{Automated: argoAutomatedSync{Prune: true, SelfHeal: true}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rendering app-of-apps.yaml: %w", err)
+	}
+
+	return []ports.FileChange{
+		{Path: "README.md", Content: []byte(repositoryReadme)},
+		{Path: "app-of-apps.yaml", Content: appOfApps},
+		{Path: "infrastructure/README.md", Content: []byte(infrastructureReadme)},
+		{Path: "applications/README.md", Content: []byte(applicationsReadme)},
+	}, nil
+}
+
+const repositoryReadme = `# GitOps
+
+This repository is the source of truth for cluster and platform configuration,
+managed by the Talos Kubernetes Cluster Management Platform (ADR-0004: Git is
+authoritative; the platform commits here, Argo CD reconciles from here, and the
+platform never reconciles anything itself).
+
+## Layout
+
+- ` + "`clusters/<name>/`" + ` — one subtree per cluster, rendered and committed by the
+  platform's cluster provisioning/upgrade/scale workflows. Do not hand-edit these
+  except through the platform (or a Git-reverting rollback it performs) — anything
+  committed outside the platform's own commits won't be reflected back into the
+  platform's own records of what changed and why.
+- ` + "`infrastructure/`" + ` — shared, cross-cluster infrastructure manifests (not
+  scoped to any one cluster).
+- ` + "`applications/`" + ` — platform-wide Argo CD Application manifests, watched by
+  the root ` + "`app-of-apps.yaml`" + `.
+- ` + "`app-of-apps.yaml`" + ` — the root Argo CD Application (App-of-Apps pattern):
+  apply this once to your Argo CD instance to bootstrap everything under
+  ` + "`applications/`" + `.
+`
+
+const infrastructureReadme = `# infrastructure/
+
+Shared, cross-cluster infrastructure manifests go here — resources that aren't
+scoped to any single cluster's ` + "`clusters/<name>/`" + ` subtree. Nothing in this
+codebase renders into this directory automatically yet; it's scaffolded so the
+layout exists from day one.
+`
+
+const applicationsReadme = `# applications/
+
+Platform-wide Argo CD Application manifests go here, watched by the root
+` + "`app-of-apps.yaml`" + ` (App-of-Apps pattern). Each file added here becomes an
+Argo CD Application once the root Application syncs. Nothing in this codebase
+renders into this directory automatically yet; it's scaffolded so the layout
+exists from day one.
+`
+
 // RenderClusterManifests renders the full manifest set for in.Cluster. The
 // returned files are always ordered the same way for a given input, so
 // successive commits produce clean, predictable diffs.

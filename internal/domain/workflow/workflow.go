@@ -20,6 +20,13 @@ const (
 	StatusFailed         Status = "FAILED"
 	StatusNeedsAttention Status = "NEEDS_ATTENTION"
 	StatusCancelled      Status = "CANCELLED"
+	// StatusAwaitingApproval is a non-error pause (§4 human-in-the-loop
+	// approval gate): a step reported there is nothing more to do until an
+	// external event arrives (typically a GitHub PR-merged webhook), so the
+	// engine stops dispatching this workflow until something calls
+	// Engine.Resume — unlike NEEDS_ATTENTION, this isn't a failure an
+	// operator needs to fix, just a wait.
+	StatusAwaitingApproval Status = "AWAITING_APPROVAL"
 )
 
 // Type identifies which registered step sequence a workflow runs (§23).

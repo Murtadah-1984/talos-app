@@ -50,6 +50,11 @@ implemented today vs. still open.
   — `internal/interfaces/http/middleware/security.go`.
 - **CI scanning**: Trivy filesystem scan (vulnerabilities, secrets, misconfiguration) and
   `govulncheck` run on every CI build (`.github/workflows/ci.yml`).
+- **Webhook signature verification**: `POST /api/v1/webhooks/github` verifies every
+  delivery's `X-Hub-Signature-256` header (HMAC-SHA256 over the raw body, keyed with
+  `PLATFORM_GITHUB_WEBHOOK_SECRET`) with a constant-time comparison before acting on
+  it; an unset secret disables the endpoint entirely rather than accepting
+  unverified webhooks (`internal/interfaces/http/webhook_handlers.go`).
 
 ## Open (tracked in the roadmap)
 

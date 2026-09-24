@@ -50,6 +50,12 @@ type Config struct {
 	// exists for that).
 	GitHubToken string
 
+	// GitHubWebhookSecret verifies the X-Hub-Signature-256 header on inbound
+	// GitHub webhook deliveries (§4 human-in-the-loop approval gate). Empty
+	// (the default) disables the webhook endpoint entirely — an unverifiable
+	// webhook is never accepted.
+	GitHubWebhookSecret string
+
 	// ArgoCDServerURL/ArgoCDToken configure the real Argo CD REST client
 	// when ArgoCDAdapterMode is "real" — same bootstrapping simplification
 	// as TalosConfigFile/GitHubToken.
@@ -161,6 +167,7 @@ func Load() (Config, error) {
 		ProxmoxAdapterMode:       getenv("PLATFORM_PROXMOX_ADAPTER", "mock"),
 		TalosConfigFile:          getenv("PLATFORM_TALOS_CONFIG_FILE", ""),
 		GitHubToken:              getenv("PLATFORM_GITHUB_TOKEN", ""),
+		GitHubWebhookSecret:      getenv("PLATFORM_GITHUB_WEBHOOK_SECRET", ""),
 		ArgoCDServerURL:          getenv("PLATFORM_ARGOCD_SERVER_URL", ""),
 		ArgoCDToken:              getenv("PLATFORM_ARGOCD_TOKEN", ""),
 		ClusterAPIKubeconfigFile: getenv("PLATFORM_CLUSTERAPI_KUBECONFIG_FILE", ""),

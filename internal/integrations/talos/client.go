@@ -19,6 +19,8 @@ import (
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 	tclient "github.com/siderolabs/talos/pkg/machinery/client"
 	clientconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
+	configmachine "github.com/siderolabs/talos/pkg/machinery/config/machine"
+	"github.com/siderolabs/talos/pkg/machinery/resources/cluster"
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
@@ -146,6 +148,34 @@ func (c *Client) ApplyMachineConfiguration(ctx context.Context, endpoint string,
 	}
 	if _, err := cli.ApplyConfiguration(ctx, req); err != nil {
 		return fmt.Errorf("applying machine configuration to %s: %w", endpoint, err)
+	}
+	return nil
+}
+
+// maintenanceFingerprints adapts a single optional fingerprint string into
+// the slice WithMaintenanceMode expects, so an empty fingerprint means
+// "accept any certificate" rather than a slice containing one empty entry.
+func maintenanceFingerprints(fingerprint string) []string {
+	if fingerprint == "" {
+		return nil
+	}
+	return []string{fingerprint}
+}
+
+func (c *Client) ApplyMaintenanceConfiguration(ctx context.Context, endpoint, rawYAML, fingerprint string) error {
+	cli, err := tclient.New(ctx,
+		tclient.WithMaintenanceMode(endpoint, maintenanceFingerprints(fingerprint)),
+		tclient.WithGRPCDialOptions(grpc.WithStatsHandler(otelgrpc.NewClientHandler())))
+	if err != nil {
+		return fmt.Errorf("connecting to Talos maintenance-mode endpoint %s: %w", endpoint, err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	if _, err := cli.ApplyConfiguration(ctx, &machineapi.ApplyConfigurationRequest{
+		Data: []byte(rawYAML),
+		Mode: machineapi.ApplyConfigurationRequest_AUTO,
+	}); err != nil {
+		return fmt.Errorf("applying maintenance-mode configuration to %s: %w", endpoint, err)
 	}
 	return nil
 }
@@ -363,6 +393,39 @@ func (c *Client) GetEtcdHealth(ctx context.Context, endpoint string) (ports.Etcd
 		Healthy:  len(member.Errors) == 0,
 		IsLeader: member.MemberId == member.Leader,
 	}, nil
+}
+
+func (c *Client) DiscoverClusterMembers(ctx context.Context, endpoint string) ([]ports.ClusterMember, error) {
+	cli, err := c.dial(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cli.Close() }()
+
+	list, err := cli.COSI.List(ctx, cosiresource.NewMetadata(cluster.NamespaceName, cluster.MemberType, "", cosiresource.VersionUndefined))
+	if err != nil {
+		return nil, fmt.Errorf("listing cluster members from %s: %w", endpoint, err)
+	}
+
+	out := make([]ports.ClusterMember, 0, len(list.Items))
+	for _, item := range list.Items {
+		m, ok := item.(*cluster.Member)
+		if !ok {
+			continue
+		}
+		spec := m.TypedSpec()
+		addrs := make([]string, 0, len(spec.Addresses))
+		for _, a := range spec.Addresses {
+			addrs = append(addrs, a.String())
+		}
+		out = append(out, ports.ClusterMember{
+			Hostname:        spec.Hostname,
+			Addresses:       addrs,
+			ControlPlane:    spec.MachineType == configmachine.TypeControlPlane,
+			OperatingSystem: spec.OperatingSystem,
+		})
+	}
+	return out, nil
 }
 
 // hostnameOf queries the network.HostnameStatus COSI resource directly

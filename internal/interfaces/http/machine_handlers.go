@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,26 @@ func mountMachines(r chi.Router, d Deps) {
 				return
 			}
 			writeJSON(w, http.StatusOK, machines)
+		})
+
+		sub.Get("/discover", func(w http.ResponseWriter, r *http.Request) {
+			endpoint := r.URL.Query().Get("endpoint")
+			if endpoint == "" {
+				writeError(w, fmt.Errorf("%w: query parameter \"endpoint\" is required", shared.ErrInvalidInput))
+				return
+			}
+			u, err := requireRoleAudited(r, d, user.ResourcePlatform, shared.ID{}, user.RoleOperator, "machine.discover_topology", "talos_endpoint", endpoint)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			members, discoverErr := d.MachineService.DiscoverClusterTopology(r.Context(), endpoint)
+			recordAudit(r.Context(), d, r, u, "machine.discover_topology", "talos_endpoint", endpoint, auditResult(discoverErr), errString(discoverErr))
+			if discoverErr != nil {
+				writeError(w, discoverErr)
+				return
+			}
+			writeJSON(w, http.StatusOK, members)
 		})
 
 		sub.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {

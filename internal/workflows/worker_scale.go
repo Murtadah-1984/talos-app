@@ -38,15 +38,24 @@ func NewWorkerScaleDefinition(deps ClusterProvisionDeps) Definition {
 				}
 				return map[string]any{"pools": len(c.Spec.Workers)}, nil
 			}),
-			step("commit-capi-scale", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
+			{Name: "commit-capi-scale", Run: clusterStepWithWorkflow(deps.Clusters, func(ctx context.Context, c *cluster.Cluster, wf *workflow.Workflow) (map[string]any, error) {
 				if c.ProviderMode != cluster.ProviderModeClusterAPI {
 					return map[string]any{"skipped": true}, nil
 				}
 				desc := fmt.Sprintf("Scale cluster %s worker pools", c.Name)
-				if err := commitClusterAPIChange(ctx, deps, c, "scale", desc); err != nil {
+				if err := commitClusterAPIChange(ctx, deps, c, wf, "scale", desc); err != nil {
 					return nil, err
 				}
 				return map[string]any{"committed": true}, nil
+			})},
+			step("await-capi-scale-merge", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
+				if c.ProviderMode != cluster.ProviderModeClusterAPI {
+					return map[string]any{"skipped": true}, nil
+				}
+				if err := awaitClusterAPIChangeMerge(ctx, deps, c); err != nil {
+					return nil, err
+				}
+				return map[string]any{"merged": true}, nil
 			}),
 			step("wait-for-cluster-api", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
 				if err := waitForClusterAPIReady(ctx, deps, c); err != nil {

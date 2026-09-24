@@ -25,6 +25,11 @@ client over it) — never direct database or Talos access:
 | Upgrade a cluster | `POST /api/v1/clusters/{id}/upgrade` |
 | Scale a worker pool | `POST /api/v1/clusters/{id}/scale` |
 | Trigger an Argo CD sync now | `POST /api/v1/clusters/{id}/sync` |
+| Roll back a change set via Git revert | `POST /api/v1/clusters/{id}/changesets/{changeSetId}/rollback` |
+| List an Argo CD project's ApplicationSets | `GET /api/v1/clusters/{id}/gitops/applicationsets` |
+| Discover an existing Talos cluster's topology from one node | `GET /api/v1/machines/discover?endpoint=<ip>` |
+| Manually resume a workflow stuck in `AWAITING_APPROVAL` | `POST /api/v1/workflows/{id}/resume` |
+| Bootstrap a new gitops/ repository's top-level layout | `POST /api/v1/gitops/repositories/{id}/scaffold` |
 | Destroy a cluster | `DELETE /api/v1/clusters/{id}` |
 
 Destructive operations (`upgrade`, `scale`, `delete`) require at least the
@@ -62,3 +67,12 @@ platform never automatically retries or rolls back destructively (§35). Check t
 step's `Error` field (via the workflow detail endpoint/UI), fix the underlying
 condition, and re-submit the originating request with a **new** idempotency key once
 you're ready to try again.
+
+A workflow sitting in `AWAITING_APPROVAL` is not stuck the same way — this is not a
+failure, just the §4 human-in-the-loop approval gate: it's waiting for its pull
+request to be merged. It resumes automatically via the GitHub webhook once that
+happens (see [../gitops/README.md](../gitops/README.md#webhook-driven-approval-4)).
+If the webhook isn't configured for the target repository, merge the PR, then call
+`POST /api/v1/workflows/{id}/resume` yourself (requires `OPERATOR` on the workflow's
+cluster, same as `sync`/`rollback`) — it re-checks the same condition the step was
+waiting on and proceeds if it's now satisfied.

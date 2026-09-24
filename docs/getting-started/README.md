@@ -67,8 +67,17 @@ export PLATFORM_GITHUB_ADAPTER=real
 export PLATFORM_GITHUB_TOKEN=ghp_...   # a PAT or GitHub App installation token
 ```
 
+To have PR merges resume a paused workflow instead of it sitting in
+`AWAITING_APPROVAL` indefinitely (§4), also set a webhook secret and register a
+webhook on the target repository pointed at `POST /api/v1/webhooks/github`,
+subscribed to "Pull requests" events:
+
+```bash
+export PLATFORM_GITHUB_WEBHOOK_SECRET=...   # must match the webhook's configured secret
+```
+
 See [../gitops/README.md](../gitops/README.md) for what the real client does and
-what's still open (repository scaffolding, webhook-driven approval).
+what's still open (repository scaffolding).
 
 ## Argo CD: mock vs. real
 

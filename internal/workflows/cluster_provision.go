@@ -44,6 +44,22 @@ func clusterStep(clusters cluster.Repository, fn func(context.Context, *cluster.
 	}
 }
 
+// clusterStepWithWorkflow is clusterStep for the handful of steps that also
+// need the workflow's own ID — e.g. to stamp it onto a ChangeSet so a later
+// webhook can look up which workflow to Engine.Resume (§4).
+func clusterStepWithWorkflow(clusters cluster.Repository, fn func(context.Context, *cluster.Cluster, *workflow.Workflow) (map[string]any, error)) StepFunc {
+	return func(ctx context.Context, wf *workflow.Workflow) (map[string]any, error) {
+		if wf.ClusterID == nil {
+			return nil, fmt.Errorf("workflow has no associated cluster")
+		}
+		c, err := clusters.Get(ctx, *wf.ClusterID)
+		if err != nil {
+			return nil, fmt.Errorf("loading cluster %s: %w", *wf.ClusterID, err)
+		}
+		return fn(ctx, c, wf)
+	}
+}
+
 // transitionAndSave advances c's lifecycle state and persists it, so a
 // cluster's observed State (§8) tracks workflow progress step-by-step
 // instead of jumping straight from PROVISIONING to READY.
@@ -187,18 +203,22 @@ func checkTalosHealth(ctx context.Context, deps ClusterProvisionDeps, c *cluster
 // described in §23:
 //
 //  1. validate request              8. create PR
-//  2. validate infrastructure        9. await + merge PR
+//  2. validate infrastructure        9. await PR merge
 //  3. validate IP allocation        10. wait for Argo CD
 //  4. generate Talos configuration  11. wait for Cluster API
 //  5. generate CAPI manifests       12. check Talos health
 //  6. generate Argo CD config       13. check Kubernetes health
 //  7. commit to Git                 14. check cluster operators / mark READY
 //
-// Step 9 ("await approval") is a human-in-the-loop gate in production: real
-// deployments resume this workflow from a GitHub PR-merged webhook rather
-// than polling. With the mock GitProvider (Phase 1, no live GitHub), this
-// step merges immediately so the end-to-end pipeline shape can be exercised
-// today.
+// Step 9 ("await-pull-request-merge") is a human-in-the-loop gate (§4): it
+// never merges the PR itself, only checks whether it's been merged yet. When
+// it hasn't, the step returns ErrAwaitingApproval, which moves the workflow
+// to AWAITING_APPROVAL and stops dispatching it — a GitHub "pull request
+// merged" webhook (webhook_handlers.go) is what calls Engine.Resume once a
+// human (or another automated system) actually merges it. The mock
+// GitProvider marks every PR "merged" immediately on creation (see
+// github.MockProvider.CreatePullRequest), so this step passes straight
+// through without waiting in local development/tests.
 func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 	step := func(name string, fn func(context.Context, *cluster.Cluster) (map[string]any, error)) StepDefinition {
 		return StepDefinition{Name: name, Run: clusterStep(deps.Clusters, fn)}
@@ -249,7 +269,7 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				}
 				return map[string]any{"project": c.Spec.ArgoCD.Project}, nil
 			}),
-			step("commit-to-git", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
+			{Name: "commit-to-git", Run: clusterStepWithWorkflow(deps.Clusters, func(ctx context.Context, c *cluster.Cluster, wf *workflow.Workflow) (map[string]any, error) {
 				repo, err := gitOpsRepo(ctx, deps, c.ID)
 				if err != nil {
 					return nil, err
@@ -273,6 +293,7 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				}
 				changeset := &gitops.ChangeSet{
 					ClusterID:      c.ID,
+					WorkflowID:     &wf.ID,
 					Description:    fmt.Sprintf("Provision cluster %s", c.Name),
 					GeneratedFiles: filePaths(files),
 					CommitSHA:      result.SHA,
@@ -282,7 +303,7 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 					return nil, fmt.Errorf("recording change set: %w", err)
 				}
 				return map[string]any{"branch": branch, "sha": result.SHA, "filesCommitted": len(files)}, nil
-			}),
+			})},
 			step("create-pull-request", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
 				repo, err := gitOpsRepo(ctx, deps, c.ID)
 				if err != nil {
@@ -308,7 +329,7 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				}
 				return map[string]any{"pullRequestURL": pr.URL, "pullRequestNumber": pr.Number}, nil
 			}),
-			step("await-and-merge-pull-request", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
+			step("await-pull-request-merge", func(ctx context.Context, c *cluster.Cluster) (map[string]any, error) {
 				repo, err := gitOpsRepo(ctx, deps, c.ID)
 				if err != nil {
 					return nil, err
@@ -321,14 +342,19 @@ func NewClusterProvisionDefinition(deps ClusterProvisionDeps) Definition {
 				if err != nil {
 					return nil, err
 				}
-				// Production: this step does not run until a GitHub
-				// PR-merged webhook resumes the workflow (§4 approval gate,
-				// not yet built). Merging here directly lets the full
-				// pipeline shape be exercised end-to-end against the mock
-				// provider today, and against real GitHub for clusters
-				// that don't require manual review.
-				if err := deps.Git.MergePullRequest(ctx, repo.owner, repo.name, prNumber); err != nil {
-					return nil, fmt.Errorf("merging pull request #%d: %w", prNumber, err)
+				// §4 human-in-the-loop approval gate: this step never merges
+				// the PR itself — merging is a human's (or some other
+				// automated system's) decision, made in GitHub. It only
+				// checks whether that's happened yet. A GitHub PR-merged
+				// webhook (see webhook_handlers.go) is what actually resumes
+				// this workflow once it has; ErrAwaitingApproval here is not
+				// a failure, just "nothing to do yet."
+				pr, err := deps.Git.GetPullRequest(ctx, repo.owner, repo.name, prNumber)
+				if err != nil {
+					return nil, fmt.Errorf("checking pull request #%d: %w", prNumber, err)
+				}
+				if pr.State != "merged" {
+					return nil, ErrAwaitingApproval
 				}
 				changeset.Status = gitops.ChangeSetMerged
 				changeset.Result = "merged"

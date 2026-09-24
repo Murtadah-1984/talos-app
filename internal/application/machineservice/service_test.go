@@ -13,6 +13,7 @@ import (
 	"github.com/talos-platform/talos-platform/internal/domain/machine"
 	"github.com/talos-platform/talos-platform/internal/domain/operation"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
+	"github.com/talos-platform/talos-platform/internal/integrations/talos"
 )
 
 // fakeMachineRepo is a minimal in-memory machine.Repository.
@@ -197,5 +198,17 @@ func TestMachineService_HardPowerOn_UnknownProviderType(t *testing.T) {
 	}
 	if op.Status != operation.StatusFailed {
 		t.Fatalf("expected the operation to be recorded as FAILED, got %s", op.Status)
+	}
+}
+
+func TestMachineService_DiscoverClusterTopology(t *testing.T) {
+	svc := machineservice.New(newFakeMachineRepo(), newFakeOperationRepo(), talos.NewMockClient(), &fakeInfraProviderRepo{providers: map[shared.ID]*infraprovider.InfrastructureProvider{}}, inframanager.NewRegistry(nil))
+
+	members, err := svc.DiscoverClusterTopology(context.Background(), "10.0.0.5")
+	if err != nil {
+		t.Fatalf("DiscoverClusterTopology: %v", err)
+	}
+	if len(members) != 1 || members[0].Hostname != "10.0.0.5" || !members[0].ControlPlane {
+		t.Fatalf("unexpected discovered members: %+v", members)
 	}
 }

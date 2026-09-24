@@ -58,6 +58,13 @@ func main() {
 	}
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
+	shutdownMetrics, err := observability.InitMetrics(ctx, cfg.Observability.ServiceName, cfg.Observability.OTLPEndpoint, cfg.Observability.TracingEnabled)
+	if err != nil {
+		logger.Error("initializing metrics", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownMetrics(context.Background()) }()
+
 	if err := postgres.Migrate(cfg.Postgres.DSN, migrations.FS, "."); err != nil {
 		logger.Error("applying database migrations", "error", err)
 		os.Exit(1)
@@ -175,27 +182,29 @@ func main() {
 	metrics := observability.NewMetrics()
 
 	deps := httpapi.Deps{
-		Logger:           logger,
-		IdentityProvider: identityProvider,
-		Authz:            authz,
-		Organizations:    organizations,
-		Projects:         projects,
-		Environments:     environments,
-		Sites:            sites,
-		Users:            users,
-		Templates:        templates,
-		InfraProviders:   infraProviders,
-		GitOps:           gitopsRepo,
-		Workflows:        workflowRepo,
-		Audit:            auditRepo,
-		AuthService:      authSvc,
-		ClusterService:   clusterSvc,
-		MachineService:   machineSvc,
-		Events:           websocket.NewHub(),
-		MetricsHandler:   metrics.Handler(),
-		CORSOrigins:      cfg.CORSOrigins,
-		RateLimitRPS:     cfg.RateLimitRPS,
-		RateLimitBurst:   cfg.RateLimitBurst,
+		Logger:              logger,
+		IdentityProvider:    identityProvider,
+		Authz:               authz,
+		Organizations:       organizations,
+		Projects:            projects,
+		Environments:        environments,
+		Sites:               sites,
+		Users:               users,
+		Templates:           templates,
+		InfraProviders:      infraProviders,
+		GitOps:              gitopsRepo,
+		Workflows:           workflowRepo,
+		Audit:               auditRepo,
+		AuthService:         authSvc,
+		ClusterService:      clusterSvc,
+		MachineService:      machineSvc,
+		WorkflowEngine:      engine,
+		GitHubWebhookSecret: cfg.GitHubWebhookSecret,
+		Events:              websocket.NewHub(),
+		MetricsHandler:      metrics.Handler(),
+		CORSOrigins:         cfg.CORSOrigins,
+		RateLimitRPS:        cfg.RateLimitRPS,
+		RateLimitBurst:      cfg.RateLimitBurst,
 	}
 
 	router := httpapi.NewRouter(deps)

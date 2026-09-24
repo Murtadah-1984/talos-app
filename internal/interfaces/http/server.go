@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/talos-platform/talos-platform/internal/domain/infraprovider"
 	"github.com/talos-platform/talos-platform/internal/domain/organization"
 	"github.com/talos-platform/talos-platform/internal/domain/project"
+	"github.com/talos-platform/talos-platform/internal/domain/shared"
 	"github.com/talos-platform/talos-platform/internal/domain/site"
 	"github.com/talos-platform/talos-platform/internal/domain/template"
 	"github.com/talos-platform/talos-platform/internal/domain/user"
@@ -25,6 +27,16 @@ import (
 	appmiddleware "github.com/talos-platform/talos-platform/internal/interfaces/http/middleware"
 	"github.com/talos-platform/talos-platform/internal/interfaces/websocket"
 )
+
+// WorkflowEngine is the narrow slice of *workflows.Engine this package
+// needs — just enough for the GitHub webhook handler to resume a paused
+// workflow (§4). Kept as a local interface (rather than importing
+// internal/workflows directly) for the same reason
+// clusterservice.WorkflowEnqueuer is: internal/workflows depends on
+// packages this one also depends on, and Go forbids the resulting cycle.
+type WorkflowEngine interface {
+	Resume(ctx context.Context, id shared.ID) error
+}
 
 // Deps bundles every dependency the HTTP layer needs. Handlers are thin:
 // they translate transport <-> application/domain calls and contain no
@@ -49,6 +61,13 @@ type Deps struct {
 	AuthService    *authservice.Service
 	ClusterService *clusterservice.Service
 	MachineService *machineservice.Service
+
+	// WorkflowEngine resumes a workflow paused in AWAITING_APPROVAL; used
+	// only by the GitHub webhook handler (§4).
+	WorkflowEngine WorkflowEngine
+	// GitHubWebhookSecret verifies inbound GitHub webhook deliveries; empty
+	// disables the webhook endpoint (see webhook_handlers.go).
+	GitHubWebhookSecret string
 
 	Events *websocket.Hub
 
@@ -86,6 +105,7 @@ func NewRouter(d Deps) *chi.Mux { //nolint:revive // deps struct is intentional
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Post("/auth/login", devLoginHandler(d))
+		mountWebhooks(api, d)
 
 		api.Group(func(authed chi.Router) {
 			authed.Use(appmiddleware.Authenticate(d.IdentityProvider, d.AuthService))

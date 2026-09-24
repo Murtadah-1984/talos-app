@@ -7,6 +7,7 @@ import (
 	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/cluster"
 	"github.com/talos-platform/talos-platform/internal/domain/gitops"
+	"github.com/talos-platform/talos-platform/internal/domain/workflow"
 )
 
 // changeBranch is stable per cluster and operation (not per workflow run),
@@ -18,17 +19,19 @@ func changeBranch(c *cluster.Cluster, operation string) string {
 }
 
 // commitClusterAPIChange renders and commits the current desired state for
-// a CLUSTER_API-mode cluster, opens and merges a PR for it, and waits for
-// Argo CD to sync and Cluster API to report the result ready. This is the
-// only way a CLUSTER_API-mode cluster's desired state reaches its
-// controllers (ADR-0002: the platform generates/updates CAPI manifests,
-// commits to Git, and never reconciles CAPI resources itself) — the
-// counterpart to how DIRECT_TALOS-mode upgrade/scale steps call
-// ports.TalosClient directly instead.
+// a CLUSTER_API-mode cluster and opens a PR for it — the only way a
+// CLUSTER_API-mode cluster's desired state reaches its controllers
+// (ADR-0002: the platform generates/updates CAPI manifests, commits to Git,
+// and never reconciles CAPI resources itself) — the counterpart to how
+// DIRECT_TALOS-mode upgrade/scale steps call ports.TalosClient directly
+// instead. It does not merge the PR or wait for Argo CD/Cluster API — see
+// awaitClusterAPIChangeMerge, a separate step so a retry (e.g. after
+// Engine.Resume) re-checks merge status instead of re-committing and
+// re-opening a duplicate PR.
 //
 // No-op (returns nil immediately) for DIRECT_TALOS-mode clusters, so
 // callers can invoke it unconditionally from a workflow step.
-func commitClusterAPIChange(ctx context.Context, deps ClusterProvisionDeps, c *cluster.Cluster, operation, description string) error {
+func commitClusterAPIChange(ctx context.Context, deps ClusterProvisionDeps, c *cluster.Cluster, wf *workflow.Workflow, operation, description string) error {
 	if c.ProviderMode != cluster.ProviderModeClusterAPI {
 		return nil
 	}
@@ -54,7 +57,7 @@ func commitClusterAPIChange(ctx context.Context, deps ClusterProvisionDeps, c *c
 	}
 
 	changeset := &gitops.ChangeSet{
-		ClusterID: c.ID, Description: description,
+		ClusterID: c.ID, WorkflowID: &wf.ID, Description: description,
 		GeneratedFiles: filePaths(files), CommitSHA: result.SHA,
 		Status: gitops.ChangeSetCommitted,
 	}
@@ -75,12 +78,38 @@ func commitClusterAPIChange(ctx context.Context, deps ClusterProvisionDeps, c *c
 	if err := deps.GitOps.UpdateChangeSet(ctx, changeset); err != nil {
 		return fmt.Errorf("recording change set: %w", err)
 	}
+	return nil
+}
 
-	// See await-and-merge-pull-request in cluster_provision.go: production
-	// deployments resume this from a GitHub PR-merged webhook rather than
-	// merging immediately (§4's approval gate, not yet built).
-	if err := deps.Git.MergePullRequest(ctx, repo.owner, repo.name, pr.Number); err != nil {
-		return fmt.Errorf("merging pull request #%d: %w", pr.Number, err)
+// awaitClusterAPIChangeMerge is the §4 human-in-the-loop gate counterpart to
+// commitClusterAPIChange: it checks whether the PR that opened has been
+// merged yet, and if not, returns ErrAwaitingApproval so the engine pauses
+// this workflow until a GitHub PR-merged webhook (webhook_handlers.go)
+// resumes it. Once merged, it triggers an Argo CD sync (if enabled) and
+// records the change set as synced. No-op for DIRECT_TALOS-mode clusters.
+func awaitClusterAPIChangeMerge(ctx context.Context, deps ClusterProvisionDeps, c *cluster.Cluster) error {
+	if c.ProviderMode != cluster.ProviderModeClusterAPI {
+		return nil
+	}
+
+	changeset, err := latestChangeSet(ctx, deps, c.ID)
+	if err != nil {
+		return err
+	}
+	repo, err := gitOpsRepo(ctx, deps, c.ID)
+	if err != nil {
+		return err
+	}
+	prNumber, err := prNumberFromURL(changeset.PullRequestURL)
+	if err != nil {
+		return err
+	}
+	pr, err := deps.Git.GetPullRequest(ctx, repo.owner, repo.name, prNumber)
+	if err != nil {
+		return fmt.Errorf("checking pull request #%d: %w", prNumber, err)
+	}
+	if pr.State != "merged" {
+		return ErrAwaitingApproval
 	}
 	changeset.Status = gitops.ChangeSetMerged
 	changeset.Result = "merged"

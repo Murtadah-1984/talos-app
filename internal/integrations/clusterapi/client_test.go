@@ -16,9 +16,10 @@ import (
 // — a test with no MachineDeployment/Machine objects would otherwise panic
 // on List() for those resources.
 var listKinds = map[schema.GroupVersionResource]string{
-	clusterGVR:           "ClusterList",
-	machineDeploymentGVR: "MachineDeploymentList",
-	machineGVR:           "MachineList",
+	clusterGVR:            "ClusterList",
+	machineDeploymentGVR:  "MachineDeploymentList",
+	machineGVR:            "MachineList",
+	machineHealthCheckGVR: "MachineHealthCheckList",
 }
 
 func testCluster() *cluster.Cluster {
@@ -156,5 +157,43 @@ func TestClient_GetClusterStatus_NotReady(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0].Ready {
 		t.Fatalf("expected the Cluster to be reported not-ready, got %+v", statuses)
+	}
+}
+
+func mhcStatus(currentHealthy, expectedMachines, remediationsAllowed int64) map[string]any {
+	return map[string]any{
+		"currentHealthy":      currentHealthy,
+		"expectedMachines":    expectedMachines,
+		"remediationsAllowed": remediationsAllowed,
+	}
+}
+
+func TestClient_GetClusterStatus_ReportsMachineHealthCheckRemediation(t *testing.T) {
+	scheme := runtime.NewScheme()
+
+	objects := []runtime.Object{
+		unstructuredResource("cluster.x-k8s.io/v1beta1", "Cluster", "default", "basra-prod", readyStatus("Provisioned")),
+		unstructuredResource("cluster.x-k8s.io/v1beta1", "MachineHealthCheck", "default", "basra-prod-mhc", mhcStatus(2, 3, 1)),
+	}
+	fakeClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds, objects...)
+	c := &Client{dyn: fakeClient}
+
+	statuses, err := c.GetClusterStatus(t.Context(), "default", "basra-prod")
+	if err != nil {
+		t.Fatalf("GetClusterStatus: %v", err)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 resource statuses (Cluster + MachineHealthCheck), got %d: %+v", len(statuses), statuses)
+	}
+
+	mhc := statuses[1]
+	if mhc.Kind != "MachineHealthCheck" || mhc.Name != "basra-prod-mhc" {
+		t.Fatalf("unexpected MachineHealthCheck status: %+v", mhc)
+	}
+	if mhc.Ready {
+		t.Errorf("expected Ready=false when currentHealthy (2) != expectedMachines (3), got %+v", mhc)
+	}
+	if mhc.Phase != "healthy=2/3 remediationsAllowed=1" {
+		t.Errorf("unexpected phase summary: %q", mhc.Phase)
 	}
 }

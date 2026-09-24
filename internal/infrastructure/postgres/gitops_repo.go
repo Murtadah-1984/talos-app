@@ -198,6 +198,26 @@ func (r *GitOpsRepository) GetChangeSet(ctx context.Context, id shared.ID) (*git
 	return c, nil
 }
 
+func (r *GitOpsRepository) GetChangeSetByPullRequestURL(ctx context.Context, url string) (*gitops.ChangeSet, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT id, cluster_id, workflow_id, description, generated_files, commit_sha, pull_request_url, status, result, created_at, updated_at
+		 FROM gitops_changesets WHERE pull_request_url = $1
+		 ORDER BY created_at DESC LIMIT 1`, url)
+	c := &gitops.ChangeSet{}
+	var status string
+	var filesJSON []byte
+	err := row.Scan(&c.ID, &c.ClusterID, &c.WorkflowID, &c.Description, &filesJSON, &c.CommitSHA, &c.PullRequestURL, &status, &c.Result, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, shared.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scanning change set: %w", err)
+	}
+	c.Status = gitops.ChangeSetStatus(status)
+	_ = json.Unmarshal(filesJSON, &c.GeneratedFiles)
+	return c, nil
+}
+
 func (r *GitOpsRepository) ListChangeSetsForCluster(ctx context.Context, clusterID shared.ID, page shared.Page) ([]*gitops.ChangeSet, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, cluster_id, workflow_id, description, generated_files, commit_sha, pull_request_url, status, result, created_at, updated_at

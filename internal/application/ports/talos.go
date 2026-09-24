@@ -81,6 +81,16 @@ type NetworkInfo struct {
 	Interfaces []string
 }
 
+// ClusterMember is one node of a Talos cluster's membership, as reported by
+// Talos's own discovery service (queried from a single already-known node,
+// not from the platform's own machine records).
+type ClusterMember struct {
+	Hostname        string
+	Addresses       []string
+	ControlPlane    bool
+	OperatingSystem string
+}
+
 // TalosClient is the single adapter boundary for all Talos API access
 // (ADR-0001). Every method takes the machine's management endpoint; PKI
 // material is resolved internally from the SecretStore, never passed in.
@@ -88,6 +98,18 @@ type TalosClient interface {
 	GetMachineStatus(ctx context.Context, endpoint string) (MachineStatus, error)
 	GetMachineConfiguration(ctx context.Context, endpoint string) (MachineConfiguration, error)
 	ApplyMachineConfiguration(ctx context.Context, endpoint string, cfg MachineConfiguration, opts ApplyOptions) error
+	// ApplyMaintenanceConfiguration pushes an initial configuration to a
+	// freshly-booted node that has no Talos PKI trust yet — Talos's
+	// "maintenance mode", an insecure, pre-PKI connection accepted only
+	// because there is no cluster identity to authenticate against before
+	// this call establishes one. fingerprint, when non-empty, pins the TLS
+	// certificate fingerprint the node's maintenance-mode API is expected to
+	// present (from `talosctl get certificate` or the platform's own
+	// bare-metal/Proxmox provisioning record of the boot image), mitigating
+	// MITM during this one bootstrap window; empty accepts any certificate,
+	// matching Talos's own default posture since there is nothing to verify
+	// against yet on a truly unknown node.
+	ApplyMaintenanceConfiguration(ctx context.Context, endpoint, rawYAML, fingerprint string) error
 	Reboot(ctx context.Context, endpoint string) error
 	Shutdown(ctx context.Context, endpoint string) error
 	Upgrade(ctx context.Context, endpoint string, opts UpgradeOptions) error
@@ -97,6 +119,12 @@ type TalosClient interface {
 	GetDisks(ctx context.Context, endpoint string) ([]DiskInfo, error)
 	GetNetworkInfo(ctx context.Context, endpoint string) (NetworkInfo, error)
 	GetEtcdHealth(ctx context.Context, endpoint string) (EtcdHealth, error)
+	// DiscoverClusterMembers queries endpoint for every member of its Talos
+	// cluster (control plane and worker), via Talos's own discovery-service-
+	// backed membership resource — letting the platform infer an existing
+	// cluster's topology purely from one already-known node, for onboarding
+	// a cluster it didn't provision itself (DIRECT_TALOS mode).
+	DiscoverClusterMembers(ctx context.Context, endpoint string) ([]ClusterMember, error)
 
 	// Capability reports whether this adapter is backed by a real Talos
 	// endpoint or is a mock/degraded placeholder (see capability states).

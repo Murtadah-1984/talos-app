@@ -60,6 +60,7 @@ func (p *MockProvider) GetClusterStatus(_ context.Context, namespace, name strin
 	return []ports.CAPIResourceStatus{
 		{Kind: "Cluster", Name: name, Namespace: namespace, Phase: "Provisioned", Ready: true},
 		{Kind: "MachineDeployment", Name: name + "-workers", Namespace: namespace, Phase: "Running", Ready: true},
+		{Kind: "MachineHealthCheck", Name: name + "-mhc", Namespace: namespace, Phase: "healthy=0/0 remediationsAllowed=0", Ready: true},
 	}, nil
 }
 

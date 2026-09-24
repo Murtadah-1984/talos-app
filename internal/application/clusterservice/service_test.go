@@ -139,6 +139,16 @@ func (f *fakeGitOpsRepo) GetChangeSet(_ context.Context, id shared.ID) (*gitops.
 	}
 	return c, nil
 }
+func (f *fakeGitOpsRepo) GetChangeSetByPullRequestURL(_ context.Context, url string) (*gitops.ChangeSet, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.changeSets {
+		if c.PullRequestURL == url {
+			return c, nil
+		}
+	}
+	return nil, shared.ErrNotFound
+}
 func (f *fakeGitOpsRepo) ListChangeSetsForCluster(context.Context, shared.ID, shared.Page) ([]*gitops.ChangeSet, error) {
 	return nil, nil
 }
@@ -262,6 +272,40 @@ func (g *fakeGitProvider) MergePullRequest(_ context.Context, _, _ string, numbe
 }
 
 func (g *fakeGitProvider) Capability() shared.CapabilityState { return shared.CapabilityAvailable }
+
+func TestService_ScaffoldRepository_CommitsTopLevelLayout(t *testing.T) {
+	ctx := context.Background()
+	git := newFakeGitProvider()
+
+	// A repository needs at least one commit on its default branch before
+	// Commit can resolve a base tree to build from — mirrors a freshly
+	// created GitHub repo initialized with a README.
+	if _, err := git.Commit(ctx, ports.CommitRequest{
+		Owner: "acme", Repo: "gitops", Branch: "main",
+		Files: []ports.FileChange{{Path: "README.md", Content: []byte("# gitops\n")}},
+	}); err != nil {
+		t.Fatalf("seeding initial commit: %v", err)
+	}
+
+	gitopsRepo := newFakeGitOpsRepo()
+	repo := &gitops.GitRepository{ID: shared.NewID(), Owner: "acme", Name: "gitops", DefaultBranch: "main"}
+	if err := gitopsRepo.CreateRepository(ctx, repo); err != nil {
+		t.Fatalf("seeding repository: %v", err)
+	}
+
+	svc := New(newFakeClusterRepo(), gitopsRepo, nil, argocd.NewMockClient(), git)
+
+	if err := svc.ScaffoldRepository(ctx, repo.ID); err != nil {
+		t.Fatalf("ScaffoldRepository: %v", err)
+	}
+
+	tree := git.files[git.branches[branchKey("acme", "gitops", "main")]]
+	for _, want := range []string{"README.md", "app-of-apps.yaml", "infrastructure/README.md", "applications/README.md"} {
+		if _, ok := tree[want]; !ok {
+			t.Errorf("expected %s to be committed, tree has: %v", want, tree)
+		}
+	}
+}
 
 func TestService_Rollback_RestoresPriorContentAndDeletesNewFiles(t *testing.T) {
 	ctx := context.Background()

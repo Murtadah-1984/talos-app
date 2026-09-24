@@ -23,6 +23,17 @@ import (
 	"github.com/talos-platform/talos-platform/internal/observability"
 )
 
+// ErrAwaitingApproval is a sentinel a StepFunc returns to pause a workflow
+// without failing it (§4 human-in-the-loop approval gate): the step checked
+// an external condition (typically "has this pull request been merged
+// yet?") and it isn't satisfied yet. The engine reverts the step to PENDING
+// (so it's reclaimed and re-run, not skipped, next time) and moves the
+// workflow to AWAITING_APPROVAL instead of NEEDS_ATTENTION, then stops
+// dispatching — nothing runs again until something calls Engine.Resume
+// (typically a webhook handler reacting to the external event actually
+// happening).
+var ErrAwaitingApproval = errors.New("workflow step is awaiting external approval")
+
 // StepFunc executes one workflow step. It receives the parent workflow (for
 // context such as ClusterID/Input) and must be idempotent: the engine may
 // call it more than once for the same step if a worker crashes mid-execution
@@ -137,6 +148,28 @@ func (e *Engine) Enqueue(ctx context.Context, wtype workflow.Type, idempotencyKe
 	return wf, nil
 }
 
+// Resume moves a workflow out of AWAITING_APPROVAL and re-dispatches it, so
+// the step that paused it (still sitting at PENDING — see ErrAwaitingApproval)
+// is reclaimed and re-run. Typically called by a webhook handler reacting to
+// the external event the step was waiting for (e.g. a GitHub PR merge), but
+// safe to call any time an operator wants to force a recheck — the step's
+// own idempotent logic decides whether to actually proceed.
+func (e *Engine) Resume(ctx context.Context, workflowID shared.ID) error {
+	wf, err := e.repo.Get(ctx, workflowID)
+	if err != nil {
+		return fmt.Errorf("loading workflow %s: %w", workflowID, err)
+	}
+	if wf.Status != workflow.StatusAwaitingApproval {
+		return fmt.Errorf("%w: workflow %s is %s, not awaiting approval", shared.ErrInvalidInput, workflowID, wf.Status)
+	}
+	wf.Status = workflow.StatusRunning
+	if err := e.repo.Update(ctx, wf); err != nil {
+		return fmt.Errorf("resuming workflow: %w", err)
+	}
+	e.recordEvent(ctx, wf, "workflow resumed", audit.SeverityInfo)
+	return e.dispatch(ctx, workflowID)
+}
+
 func (e *Engine) dispatch(ctx context.Context, workflowID shared.ID) error {
 	payload, err := json.Marshal(dispatchMessage{WorkflowID: workflowID})
 	if err != nil {
@@ -197,6 +230,21 @@ func (e *Engine) executeNext(ctx context.Context, workflowID shared.ID) error {
 	))
 	output, runErr := def.Steps[step.Sequence].Run(stepCtx, wf)
 	now := time.Now().UTC()
+	if errors.Is(runErr, ErrAwaitingApproval) {
+		span.AddEvent("awaiting approval")
+		span.End()
+		step.Status = workflow.StatusPending
+		step.FinishedAt = nil
+		if err := e.repo.UpdateStep(ctx, step); err != nil {
+			return fmt.Errorf("reverting step to pending: %w", err)
+		}
+		wf.Status = workflow.StatusAwaitingApproval
+		if err := e.repo.Update(ctx, wf); err != nil {
+			return fmt.Errorf("marking workflow awaiting approval: %w", err)
+		}
+		e.recordEvent(ctx, wf, fmt.Sprintf("step %q is awaiting approval", step.Name), audit.SeverityInfo)
+		return nil // stop dispatching; Resume picks this back up
+	}
 	step.FinishedAt = &now
 	if runErr != nil {
 		span.SetStatus(codes.Error, runErr.Error())

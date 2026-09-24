@@ -40,15 +40,12 @@ testable — no phase depends on unfinished work from a later phase to run.
       process. `ports.TalosClient` methods are keyed only by machine endpoint, not
       cluster ID, so a real multi-cluster deployment needs per-cluster credential
       resolution threaded through — tracked as follow-up work, not yet implemented.
-- [ ] Machine discovery (enumerating not-yet-known machines) — this is really an
-      infrastructure-provider concern (bare metal/Proxmox `DiscoverMachines`, §10) once
-      a machine already has an endpoint; nothing further to add on the Talos side.
-- [ ] Cluster discovery via Talos (`DIRECT_TALOS` mode) — inferring an existing
-      cluster's topology purely from querying its machines, for onboarding
-      already-running clusters the platform didn't provision itself.
-- [ ] Maintenance-mode (insecure, pre-PKI) connections for freshly-booted, not-yet-
-      configured machines — needed once Phase 6 bare-metal/Proxmox provisioning
-      workflows actually create machines and need to push their first configuration.
+- [x] Machine discovery (enumerating not-yet-known machines) — clarified, not built:
+      this is really an infrastructure-provider concern (bare metal/Proxmox
+      `DiscoverMachines`, §10, already real since Phase 6) once a machine already has
+      an endpoint; nothing further belonged on the Talos side.
+- [x] Cluster discovery via Talos (`DIRECT_TALOS` mode) — closed in Phase 8, see below.
+- [x] Maintenance-mode (insecure, pre-PKI) connections — closed in Phase 8, see below.
 
 ## Phase 3 — GitOps (GitHub)
 
@@ -73,15 +70,8 @@ testable — no phase depends on unfinished work from a later phase to run.
 - [x] End-to-end test (`TestClusterProvisionWorkflow_EndToEnd`) exercising the full
       cluster request → Git commit → PR → merge → Argo CD sync → READY pipeline
       against the mock adapters.
-- [ ] **GitOps repository scaffolding generator** — bootstrapping a brand-new `gitops/`
-      repository's top-level layout (`infrastructure/`, `applications/`, App-of-Apps
-      root Applications per §3–§4) is not yet built; today the renderer only produces
-      one cluster's `clusters/<name>/` subtree, assuming the repository and its
-      Argo CD App-of-Apps root already exist.
-- [ ] The human-in-the-loop approval gate (§4) is not yet webhook-driven — the
-      `await-and-merge-pull-request` step merges immediately rather than pausing for a
-      GitHub PR-merged webhook. Needed before this pipeline is safe for
-      review-required production changes.
+- [x] **GitOps repository scaffolding generator** and **webhook-driven human-in-the-loop
+      approval gate** (§4) — both closed in Phase 8, see below.
 
 ## Phase 4 — Argo CD
 
@@ -110,12 +100,8 @@ testable — no phase depends on unfinished work from a later phase to run.
       forever. Migration `0005` corrects the constraint to `(target_kind, target_id,
       title)`, and `UpsertAlert` now updates `fired_at`/`resolved_at` correctly across
       re-fire/resolve cycles.
-- [ ] **ApplicationSet discovery** is not implemented — only individual Applications.
-- [ ] **Rollback via Git revert** (§18, §20) is not implemented. A correct
-      implementation needs the commit SHA a change produced (not currently persisted
-      on `gitops.ChangeSet`) and a way to resolve a commit's parent tree, then
-      re-commit the reverted file contents as a new change — real work, deliberately
-      not force-fit into this pass. Tracked as a follow-up, not faked.
+- [x] **ApplicationSet discovery** and **rollback via Git revert** (§18, §20) — both
+      closed in Phase 8, see below.
 
 ## Phase 5 — Cluster API
 
@@ -140,9 +126,11 @@ testable — no phase depends on unfinished work from a later phase to run.
       `POST /clusters/{id}/upgrade` and `/scale` now actually reach Cluster API for
       `CLUSTER_API`-mode clusters via the above; no new endpoints were needed since the
       gap was in the workflow, not the API surface.
-- [ ] **Remediation** (CAPI's own MachineHealthCheck-driven replacement) is observed
-      (via `GetClusterStatus`'s Machine-level readiness) but not orchestrated — there is
-      no platform-initiated "replace this unhealthy machine" action yet.
+- [x] **Remediation** (CAPI's own MachineHealthCheck-driven replacement) is now
+      directly observed — `GetClusterStatus` lists MachineHealthCheck resources for the
+      cluster alongside Machine-level readiness (Phase 8) — but still not orchestrated:
+      there is no platform-initiated "replace this unhealthy machine" action, by
+      design (ADR-0002 — that's CAPI's own controller's job).
 - [ ] **Provider-specific infrastructure CRs** (the `infrastructureRef` a real
       deployment points at) are deliberately not rendered: no infrastructure provider
       in this codebase is CAPI-aware yet (Phase 6 is still mock-only), so a fabricated
@@ -214,12 +202,8 @@ testable — no phase depends on unfinished work from a later phase to run.
       workflow engine (`internal/workflows/engine.go`). Per-integration
       (Talos/GitHub/ArgoCD/ClusterAPI/Proxmox) spans are not yet instrumented — still
       open.
-- [ ] OpenTelemetry metrics/logs export (only traces are wired today; Prometheus
-      metrics exist separately via `/metrics` but are not yet correlated with traces).
-- [ ] Per-integration client call spans (Talos/GitHub/ArgoCD/ClusterAPI/Proxmox).
-- [ ] Automated (scheduled) database backups — the scripts exist but nothing invokes
-      them on a schedule yet; that's a deployment-level concern (cron/CronJob) left to
-      the operator for now.
+- [x] OpenTelemetry metrics/logs export, per-integration client call spans, and
+      automated scheduled database backups — all closed in Phase 8, see below.
 
 ## Phase 8 — Closing the gaps
 
@@ -241,8 +225,19 @@ limitation so the mock-vs-real story is complete everywhere.
       stats handler on the Talos client's dial; `rest.Config.WrapTransport` on the
       Cluster API dynamic client. One span per real backend call, with no changes
       needed to each method's business logic.
-- [ ] OpenTelemetry metrics/logs export — correlate the existing Prometheus metrics
-      and structured logs with trace IDs, and/or export OTel metrics alongside traces.
+- [x] OpenTelemetry metrics/logs export — `observability.InitMetrics`
+      (`internal/observability/otel.go`) exports OTel metrics to the same OTLP
+      collector traces go to; once set, `otelhttp`'s existing instrumentation (already
+      wrapping the API server and every real integration client) emits request
+      duration/count metrics through it automatically. HTTP request log lines now
+      carry `trace_id`/`span_id` when a span is active
+      (`internal/interfaces/http/middleware/logging.go`), so a log line pivots
+      straight to its trace. Also fixed a real gap found along the way:
+      `platform-scheduler` never called `InitTracing` at all — it now does, plus a
+      span around each reconciliation tick. Metrics/logs export elsewhere (workflow
+      engine, integration clients) still only has traces, not correlated log lines —
+      wiring every `slog` call site through `*Context` variants everywhere would be a
+      much larger mechanical change, deliberately not done here.
 - [x] Argo CD **ApplicationSet discovery** — `ArgoCDClient.ListApplicationSets`
       (`internal/integrations/argocd/client.go`), exposed as a live passthrough (not a
       cached domain entity, unlike individual Applications) at
@@ -254,17 +249,53 @@ limitation so the mock-vs-real story is complete everywhere.
       `GitProvider.GetCommitParent` port method. Reverts only the file changes a change
       set made — not side effects a workflow step took outside Git (e.g. a direct Talos
       call in `DIRECT_TALOS` mode).
-- [ ] **GitOps repository scaffolding generator** — bootstrapping a brand-new `gitops/`
-      repository layout for a tenant that doesn't have one yet.
-- [ ] **Webhook-driven human-in-the-loop approval gate** (§4) — currently polling-based.
-- [ ] Cluster API **remediation** (observing CAPI's own MachineHealthCheck-driven
-      replacement, not initiating it).
+- [x] **GitOps repository scaffolding generator** — `gitopsrender.RenderRepositoryScaffold`
+      renders the top-level `gitops/` layout (README, `infrastructure/`,
+      `applications/`, a root App-of-Apps Application), and
+      `ClusterService.ScaffoldRepository` commits it straight to the repository's
+      default branch (no PR — there's nothing yet to review), exposed as
+      `POST /api/v1/gitops/repositories/{id}/scaffold`. The `GitRepository` record
+      itself must already exist (`CreateRepository`, still no HTTP endpoint of its
+      own — a pre-existing gap, not introduced here) and the repository needs at
+      least one existing commit on its default branch (e.g. created with a README),
+      since `Commit` resolves the branch's current tip to build from — the same
+      precondition every other commit path in this codebase already has.
+- [x] **Webhook-driven human-in-the-loop approval gate** (§4) — the
+      `await-pull-request-merge`/`await-capi-*-merge` workflow steps no longer merge a
+      PR themselves; they check whether it's merged yet and, if not, return
+      `workflows.ErrAwaitingApproval`, which the engine turns into a new
+      `AWAITING_APPROVAL` workflow status and stops dispatching (no polling — the
+      workflow sits idle). `POST /api/v1/webhooks/github`
+      (`internal/interfaces/http/webhook_handlers.go`), verified via HMAC-SHA256
+      (`PLATFORM_GITHUB_WEBHOOK_SECRET`), resolves a GitHub "pull request merged"
+      event to its `gitops.ChangeSet` (now via `GetChangeSetByPullRequestURL`, and
+      `ChangeSet.WorkflowID` is now actually populated at creation time) and calls
+      `Engine.Resume`, which re-dispatches the same paused step. The mock
+      `GitProvider` marks every PR "merged" immediately on creation, so local
+      dev/tests still complete without a webhook. `POST /api/v1/workflows/{id}/resume`
+      is a manual fallback for repositories that haven't registered the webhook.
+- [x] Cluster API **remediation observation** (observing CAPI's own
+      MachineHealthCheck-driven replacement, not initiating it) — see Phase 5.
 - [ ] Cluster API **provider-specific infrastructure CRs** (the `infrastructureRef` a
       real CAPI cluster needs — AWSCluster/vSphereCluster/etc.).
-- [ ] Talos **machine discovery** (enumerating not-yet-known machines) and **cluster
-      discovery** (inferring an existing cluster's topology in `DIRECT_TALOS` mode).
-- [ ] Talos **maintenance-mode (insecure, pre-PKI) connections** for freshly-booted,
-      not-yet-joined nodes.
+- [x] Talos **cluster discovery** (`TalosClient.DiscoverClusterMembers`, inferring an
+      existing cluster's topology in `DIRECT_TALOS` mode from one seed endpoint, via
+      Talos's own discovery-service-backed Member resource), exposed as a live,
+      read-only `GET /api/v1/machines/discover?endpoint=<ip>`. Deliberately doesn't
+      create `machine.Machine` records: doing that needs a
+      registration/import path this codebase doesn't have yet (every existing machine
+      record today comes from an infrastructure provider's own `ProvisionMachine`
+      call, which an externally provisioned cluster's nodes never went through).
+      "Machine discovery" (enumerating not-yet-known machines) was already correctly
+      scoped as an infrastructure-provider concern, not a Talos one — see Phase 6's
+      `DiscoverMachines`.
+- [x] Talos **maintenance-mode (insecure, pre-PKI) connections**
+      (`TalosClient.ApplyMaintenanceConfiguration`) for freshly-booted, not-yet-joined
+      nodes, with optional TLS certificate fingerprint pinning. Not yet called from any
+      workflow — no bare-metal/Proxmox provisioning step pushes an initial
+      configuration yet (Phase 6 providers create VMs/power on machines; they don't
+      drive first-boot Talos config), so this lands as an available capability, the
+      same way `ApplyMachineConfiguration` itself has no caller yet either.
 - [ ] Talos `Client` construction from more than a single talosconfig (multi-cluster
       credential handling).
 

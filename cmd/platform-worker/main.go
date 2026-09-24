@@ -44,6 +44,13 @@ func main() {
 	}
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
+	shutdownMetrics, err := observability.InitMetrics(ctx, "platform-worker", cfg.Observability.OTLPEndpoint, cfg.Observability.TracingEnabled)
+	if err != nil {
+		logger.Error("initializing metrics", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownMetrics(context.Background()) }()
+
 	if err := postgres.Migrate(cfg.Postgres.DSN, migrations.FS, "."); err != nil {
 		logger.Error("applying database migrations", "error", err)
 		os.Exit(1)

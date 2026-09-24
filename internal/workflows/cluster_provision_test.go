@@ -187,6 +187,18 @@ func (f *fakeGitOpsRepo) GetChangeSet(_ context.Context, id shared.ID) (*gitops.
 	}
 	return nil, shared.ErrNotFound
 }
+func (f *fakeGitOpsRepo) GetChangeSetByPullRequestURL(_ context.Context, url string) (*gitops.ChangeSet, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sets := range f.changeSets {
+		for _, existing := range sets {
+			if existing.PullRequestURL == url {
+				return existing, nil
+			}
+		}
+	}
+	return nil, shared.ErrNotFound
+}
 func (f *fakeGitOpsRepo) ListChangeSetsForCluster(_ context.Context, clusterID shared.ID, page shared.Page) ([]*gitops.ChangeSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
