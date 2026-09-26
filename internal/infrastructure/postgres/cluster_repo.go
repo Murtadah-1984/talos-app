@@ -23,7 +23,7 @@ func NewClusterRepository(pool *pgxpool.Pool) *ClusterRepository {
 }
 
 const clusterColumns = `id, organization_id, project_id, environment_id, site_id, template_id,
-	name, endpoint, provider_mode, state, spec, git_commit_sha, created_at, updated_at`
+	name, endpoint, provider_mode, state, spec, git_commit_sha, talos_config_ref, created_at, updated_at`
 
 func (r *ClusterRepository) Create(ctx context.Context, c *cluster.Cluster) error {
 	c.Touch()
@@ -36,10 +36,10 @@ func (r *ClusterRepository) Create(ctx context.Context, c *cluster.Cluster) erro
 	}
 	_, err = r.pool.Exec(ctx,
 		`INSERT INTO clusters (id, organization_id, project_id, environment_id, site_id, template_id,
-			name, endpoint, provider_mode, state, spec, git_commit_sha, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			name, endpoint, provider_mode, state, spec, git_commit_sha, talos_config_ref, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		c.ID, c.OrganizationID, c.ProjectID, c.EnvironmentID, c.SiteID, c.TemplateID,
-		c.Name, c.Endpoint, c.ProviderMode, c.State, specJSON, c.GitCommitSHA, c.CreatedAt, c.UpdatedAt)
+		c.Name, c.Endpoint, c.ProviderMode, c.State, specJSON, c.GitCommitSHA, c.TalosConfigRef, c.CreatedAt, c.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting cluster: %w", err)
 	}
@@ -118,8 +118,8 @@ func (r *ClusterRepository) Update(ctx context.Context, c *cluster.Cluster) erro
 	}
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE clusters SET name=$2, endpoint=$3, provider_mode=$4, state=$5, spec=$6, git_commit_sha=$7,
-			template_id=$8, updated_at=$9 WHERE id=$1`,
-		c.ID, c.Name, c.Endpoint, c.ProviderMode, c.State, specJSON, c.GitCommitSHA, c.TemplateID, c.UpdatedAt)
+			template_id=$8, talos_config_ref=$9, updated_at=$10 WHERE id=$1`,
+		c.ID, c.Name, c.Endpoint, c.ProviderMode, c.State, specJSON, c.GitCommitSHA, c.TemplateID, c.TalosConfigRef, c.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("updating cluster: %w", err)
 	}
@@ -145,7 +145,7 @@ func scanCluster(row rowScanner) (*cluster.Cluster, error) {
 	var specJSON []byte
 	var providerMode, state string
 	err := row.Scan(&c.ID, &c.OrganizationID, &c.ProjectID, &c.EnvironmentID, &c.SiteID, &c.TemplateID,
-		&c.Name, &c.Endpoint, &providerMode, &state, &specJSON, &c.GitCommitSHA, &c.CreatedAt, &c.UpdatedAt)
+		&c.Name, &c.Endpoint, &providerMode, &state, &specJSON, &c.GitCommitSHA, &c.TalosConfigRef, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, shared.ErrNotFound
 	}

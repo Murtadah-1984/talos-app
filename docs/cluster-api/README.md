@@ -21,15 +21,39 @@ cluster.
   well-documented upstream schema.
 - `TalosControlPlane` (`controlplane.cluster.x-k8s.io/v1alpha3`) and
   `TalosConfigTemplate` (`bootstrap.cluster.x-k8s.io/v1alpha3`) — from Sidero Labs'
-  Cluster API Control Plane/Bootstrap Providers for Talos (CACPPT/CABPT). These two
-  CRDs are less universally documented than core CAPI; treat the rendered fields as a
-  starting point to verify against the CACPPT/CABPT version actually installed in your
-  management cluster, not a guarantee of exact fidelity.
+  Cluster API Control Plane/Bootstrap Providers for Talos (CACPPT/CABPT).
+- `ProxmoxCluster` and `ProxmoxMachineTemplate`
+  (`infrastructure.cluster.x-k8s.io/v1alpha1`) — from
+  [cluster-api-provider-proxmox](https://github.com/ionos-cloud/cluster-api-provider-proxmox)
+  ("CAPMOX") — **only when Proxmox infrastructure is configured** (see below), wired
+  into `Cluster.spec.infrastructureRef`, `TalosControlPlane.spec.infrastructureTemplate`,
+  and each worker pool's `MachineDeployment` template `infrastructureRef`. When not
+  configured, these fields are simply omitted, exactly as before this existed.
 
-Provider-specific infrastructure CRs (what a real `infrastructureRef` would point at)
-are deliberately **not** rendered: no infrastructure provider in this codebase is
-CAPI-aware yet (Phase 6 is still mock-only for bare metal/Proxmox), so fabricating a
-specific infra CRD shape would be more misleading than useful.
+These four CRDs are all less universally documented/stable than core CAPI; treat the
+rendered fields as a starting point to verify against the CACPPT/CABPT/CAPMOX version
+actually installed in your management cluster, not a guarantee of exact fidelity.
+
+## Proxmox infrastructure CRs
+
+Set via `internal/integrations/clusterapi.ProxmoxInfrastructure`, populated in
+`cmd/platform-api/main.go` and `cmd/platform-worker/main.go` from the **same** global
+Proxmox configuration the real `ports.InfrastructureProvider` client already uses
+(`PLATFORM_PROXMOX_API_URL`, `PLATFORM_PROXMOX_NODE`, `PLATFORM_PROXMOX_TEMPLATE_VMID`)
+whenever `PLATFORM_PROXMOX_ADAPTER=real` — the same "Phase 2-6 bootstrapping
+simplification, one process-wide instance from global config, not a per-organization
+`infraprovider.InfrastructureProvider` record" pattern documented in
+[../infrastructure/README.md](../infrastructure/README.md), not a new inconsistency.
+
+`ProxmoxCluster.spec.credentialsRef` points at a Kubernetes Secret named
+`<cluster-name>-proxmox-credentials` by default — **the platform does not create
+this Secret**. Unlike GitOps-committed manifests, a live credential Secret in the
+management cluster is provisioned out of band by the operator, the same way every
+other CAPI infrastructure provider's credentials are (this is standard CAPI operator
+setup, not specific to this platform).
+
+Bare metal has no comparably established CAPI infrastructure provider to target, so
+it remains CAPI-unaware — `DIRECT_TALOS` mode is the path for bare-metal clusters.
 
 ## What the real client observes
 

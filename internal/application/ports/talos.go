@@ -125,6 +125,16 @@ type TalosClient interface {
 	// cluster's topology purely from one already-known node, for onboarding
 	// a cluster it didn't provision itself (DIRECT_TALOS mode).
 	DiscoverClusterMembers(ctx context.Context, endpoint string) ([]ClusterMember, error)
+	// EnsureCredentials registers the Talos PKI (talosconfigYAML) to use for
+	// endpoint, so every other method called with that same endpoint uses
+	// these credentials instead of the adapter's single default talosconfig
+	// — this is what lets one platform process reach more than one Talos
+	// cluster's machines. Idempotent: registering the same endpoint again
+	// (e.g. after credential rotation) just replaces what's stored.
+	// Endpoints never explicitly registered fall back to the default
+	// talosconfig the adapter was constructed with, so single-cluster
+	// deployments (the common case) never need to call this at all.
+	EnsureCredentials(ctx context.Context, endpoint string, talosconfigYAML []byte) error
 
 	// Capability reports whether this adapter is backed by a real Talos
 	// endpoint or is a mock/degraded placeholder (see capability states).

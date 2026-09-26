@@ -9,12 +9,37 @@ import (
 	"github.com/talos-platform/talos-platform/internal/application/inframanager"
 	"github.com/talos-platform/talos-platform/internal/application/machineservice"
 	"github.com/talos-platform/talos-platform/internal/application/ports"
+	"github.com/talos-platform/talos-platform/internal/domain/cluster"
 	"github.com/talos-platform/talos-platform/internal/domain/infraprovider"
 	"github.com/talos-platform/talos-platform/internal/domain/machine"
 	"github.com/talos-platform/talos-platform/internal/domain/operation"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
+	"github.com/talos-platform/talos-platform/internal/infrastructure/secrets"
 	"github.com/talos-platform/talos-platform/internal/integrations/talos"
 )
+
+// fakeClusterRepo is a minimal in-memory cluster.Repository covering only
+// what ensureTalosCredentials touches (Get).
+type fakeClusterRepo struct {
+	cluster.Repository
+	clusters map[shared.ID]*cluster.Cluster
+}
+
+func newFakeClusterRepo(clusters ...*cluster.Cluster) *fakeClusterRepo {
+	r := &fakeClusterRepo{clusters: make(map[shared.ID]*cluster.Cluster)}
+	for _, c := range clusters {
+		r.clusters[c.ID] = c
+	}
+	return r
+}
+
+func (r *fakeClusterRepo) Get(_ context.Context, id shared.ID) (*cluster.Cluster, error) {
+	c, ok := r.clusters[id]
+	if !ok {
+		return nil, shared.ErrNotFound
+	}
+	return c, nil
+}
 
 // fakeMachineRepo is a minimal in-memory machine.Repository.
 type fakeMachineRepo struct {
@@ -126,7 +151,7 @@ func setup(t *testing.T) (*machineservice.Service, *machine.Machine, *fakeInfraP
 	registry := inframanager.NewRegistry(map[infraprovider.Type]ports.InfrastructureProvider{
 		infraprovider.TypeProxmox: infra,
 	})
-	svc := machineservice.New(newFakeMachineRepo(m), newFakeOperationRepo(), nil, infraProviders, registry)
+	svc := machineservice.New(newFakeMachineRepo(m), newFakeOperationRepo(), nil, infraProviders, registry, nil, nil)
 	return svc, m, infra
 }
 
@@ -190,7 +215,7 @@ func TestMachineService_HardPowerOn_UnknownProviderType(t *testing.T) {
 		providerRowID: {ID: providerRowID, Type: infraprovider.TypeAWS},
 	}}
 	registry := inframanager.NewRegistry(map[infraprovider.Type]ports.InfrastructureProvider{})
-	svc := machineservice.New(newFakeMachineRepo(m), newFakeOperationRepo(), nil, infraProviders, registry)
+	svc := machineservice.New(newFakeMachineRepo(m), newFakeOperationRepo(), nil, infraProviders, registry, nil, nil)
 
 	op, err := svc.HardPowerOn(context.Background(), m.ID, shared.NewID(), "key")
 	if err == nil {
@@ -202,7 +227,7 @@ func TestMachineService_HardPowerOn_UnknownProviderType(t *testing.T) {
 }
 
 func TestMachineService_DiscoverClusterTopology(t *testing.T) {
-	svc := machineservice.New(newFakeMachineRepo(), newFakeOperationRepo(), talos.NewMockClient(), &fakeInfraProviderRepo{providers: map[shared.ID]*infraprovider.InfrastructureProvider{}}, inframanager.NewRegistry(nil))
+	svc := machineservice.New(newFakeMachineRepo(), newFakeOperationRepo(), talos.NewMockClient(), &fakeInfraProviderRepo{providers: map[shared.ID]*infraprovider.InfrastructureProvider{}}, inframanager.NewRegistry(nil), nil, nil)
 
 	members, err := svc.DiscoverClusterTopology(context.Background(), "10.0.0.5")
 	if err != nil {
@@ -210,5 +235,61 @@ func TestMachineService_DiscoverClusterTopology(t *testing.T) {
 	}
 	if len(members) != 1 || members[0].Hostname != "10.0.0.5" || !members[0].ControlPlane {
 		t.Fatalf("unexpected discovered members: %+v", members)
+	}
+}
+
+func TestMachineService_Health_ResolvesPerClusterTalosCredentials(t *testing.T) {
+	ctx := context.Background()
+	secretStore, err := secrets.NewLocalStore("")
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+	talosconfig := []byte("context: cluster-a\ncontexts:\n  cluster-a: {}\n")
+	ref := ports.SecretRef{Backend: "talos", Path: "cluster-a-talosconfig"}
+	if err := secretStore.Put(ctx, ref, talosconfig); err != nil {
+		t.Fatalf("seeding secret store: %v", err)
+	}
+
+	c := &cluster.Cluster{ID: shared.NewID(), Name: "cluster-a", TalosConfigRef: "cluster-a-talosconfig"}
+	clusters := newFakeClusterRepo(c)
+
+	m := &machine.Machine{ID: shared.NewID(), ClusterID: &c.ID, ManagementIP: "10.0.0.5"}
+	talosMock := talos.NewMockClient()
+
+	svc := machineservice.New(newFakeMachineRepo(m), newFakeOperationRepo(), talosMock, &fakeInfraProviderRepo{providers: map[shared.ID]*infraprovider.InfrastructureProvider{}}, inframanager.NewRegistry(nil), clusters, secretStore)
+
+	if _, err := svc.Health(ctx, m.ID); err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+
+	got, ok := talosMock.CredentialsFor(m.ManagementIP)
+	if !ok {
+		t.Fatal("expected EnsureCredentials to have been called for the machine's endpoint")
+	}
+	if string(got) != string(talosconfig) {
+		t.Errorf("expected the cluster's own talosconfig to be registered, got %q", got)
+	}
+}
+
+func TestMachineService_Health_FallsBackToDefaultCredentialsWhenClusterHasNoConfigRef(t *testing.T) {
+	ctx := context.Background()
+	secretStore, err := secrets.NewLocalStore("")
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	c := &cluster.Cluster{ID: shared.NewID(), Name: "cluster-a"} // no TalosConfigRef
+	clusters := newFakeClusterRepo(c)
+	m := &machine.Machine{ID: shared.NewID(), ClusterID: &c.ID, ManagementIP: "10.0.0.5"}
+	talosMock := talos.NewMockClient()
+
+	svc := machineservice.New(newFakeMachineRepo(m), newFakeOperationRepo(), talosMock, &fakeInfraProviderRepo{providers: map[shared.ID]*infraprovider.InfrastructureProvider{}}, inframanager.NewRegistry(nil), clusters, secretStore)
+
+	if _, err := svc.Health(ctx, m.ID); err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+
+	if _, ok := talosMock.CredentialsFor(m.ManagementIP); ok {
+		t.Error("expected no EnsureCredentials call when the cluster has no TalosConfigRef (falls back to the default talosconfig)")
 	}
 }

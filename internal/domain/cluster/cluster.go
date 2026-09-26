@@ -161,6 +161,15 @@ type Cluster struct {
 	ProviderMode ProviderMode
 	State        State
 
+	// TalosConfigRef points at this cluster's own talosconfig (PKI) in the
+	// SecretStore (ADR-0001, ADR-0006), letting one platform process reach
+	// more than one Talos cluster's machines — each keyed by which cluster
+	// owns the target endpoint, resolved via the owning machine's
+	// ClusterID. Empty means "use the process's single default talosconfig"
+	// (PLATFORM_TALOS_CONFIG_FILE), the original single-cluster deployment
+	// shape, which keeps working unchanged.
+	TalosConfigRef string
+
 	Spec Spec
 
 	// GitCommitSHA is the last commit rendered/observed for this cluster's

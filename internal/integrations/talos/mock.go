@@ -19,8 +19,9 @@ import (
 // would need PKI for beyond what's configured — it reports its state
 // truthfully via Capability().
 type MockClient struct {
-	mu       sync.Mutex
-	machines map[string]*mockMachine
+	mu          sync.Mutex
+	machines    map[string]*mockMachine
+	credentials map[string][]byte // endpoint -> last EnsureCredentials payload, for tests
 }
 
 type mockMachine struct {
@@ -34,7 +35,26 @@ type mockMachine struct {
 // are lazily created on first access so any endpoint string works out of the
 // box in local development.
 func NewMockClient() *MockClient {
-	return &MockClient{machines: make(map[string]*mockMachine)}
+	return &MockClient{machines: make(map[string]*mockMachine), credentials: make(map[string][]byte)}
+}
+
+// EnsureCredentials records talosconfigYAML for endpoint (the mock has no
+// real PKI trust to establish, so this is purely bookkeeping, checkable via
+// CredentialsFor in tests exercising multi-cluster credential resolution).
+func (c *MockClient) EnsureCredentials(_ context.Context, endpoint string, talosconfigYAML []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.credentials[endpoint] = talosconfigYAML
+	return nil
+}
+
+// CredentialsFor returns whatever was last registered for endpoint via
+// EnsureCredentials, and whether anything was registered at all.
+func (c *MockClient) CredentialsFor(endpoint string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data, ok := c.credentials[endpoint]
+	return data, ok
 }
 
 func (c *MockClient) machine(endpoint string) *mockMachine {

@@ -1,6 +1,7 @@
 package clusterapi
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -85,6 +86,103 @@ func TestClient_RenderManifests_IsDeterministic(t *testing.T) {
 		if string(first[i].Content) != string(second[i].Content) {
 			t.Errorf("file %s rendered differently on repeated calls", first[i].Path)
 		}
+	}
+}
+
+func TestClient_RenderManifests_RendersProxmoxInfrastructureWhenConfigured(t *testing.T) {
+	cl := testCluster()
+	cl.Endpoint = "10.0.0.100"
+	c := &Client{proxmox: ProxmoxInfrastructure{Endpoint: "https://pve.example.com:8006", Node: "pve1", TemplateVMID: 9000}}
+
+	files, err := c.RenderManifests(t.Context(), cl)
+	if err != nil {
+		t.Fatalf("RenderManifests: %v", err)
+	}
+
+	wantPaths := []string{
+		"clusters/basra-prod/capi-proxmox-cluster.yaml",
+		"clusters/basra-prod/capi-cluster.yaml",
+		"clusters/basra-prod/capi-proxmox-machinetemplate-control-plane.yaml",
+		"clusters/basra-prod/capi-control-plane.yaml",
+		"clusters/basra-prod/capi-proxmox-machinetemplate-default.yaml",
+		"clusters/basra-prod/capi-machinedeployment-default.yaml",
+		"clusters/basra-prod/capi-talosconfigtemplate-default.yaml",
+		"clusters/basra-prod/capi-proxmox-machinetemplate-gpu.yaml",
+		"clusters/basra-prod/capi-machinedeployment-gpu.yaml",
+		"clusters/basra-prod/capi-talosconfigtemplate-gpu.yaml",
+	}
+	if len(files) != len(wantPaths) {
+		t.Fatalf("expected %d files, got %d: %+v", len(wantPaths), len(files), files)
+	}
+	for i, want := range wantPaths {
+		if files[i].Path != want {
+			t.Errorf("file %d: expected path %q, got %q", i, want, files[i].Path)
+		}
+	}
+
+	byPath := make(map[string]string, len(files))
+	for _, f := range files {
+		byPath[f.Path] = string(f.Content)
+	}
+
+	proxmoxCluster := byPath["clusters/basra-prod/capi-proxmox-cluster.yaml"]
+	if !strings.Contains(proxmoxCluster, "kind: ProxmoxCluster") {
+		t.Errorf("expected ProxmoxCluster kind, got:\n%s", proxmoxCluster)
+	}
+	if !strings.Contains(proxmoxCluster, "host: 10.0.0.100") {
+		t.Errorf("expected controlPlaneEndpoint host from cluster.Endpoint, got:\n%s", proxmoxCluster)
+	}
+	if !strings.Contains(proxmoxCluster, "name: basra-prod-proxmox-credentials") {
+		t.Errorf("expected default credentials secret name, got:\n%s", proxmoxCluster)
+	}
+	if !strings.Contains(proxmoxCluster, "- pve1") {
+		t.Errorf("expected allowedNodes to include the configured node, got:\n%s", proxmoxCluster)
+	}
+
+	capiCluster := byPath["clusters/basra-prod/capi-cluster.yaml"]
+	if !strings.Contains(capiCluster, "infrastructureRef:") || !strings.Contains(capiCluster, "kind: ProxmoxCluster") {
+		t.Errorf("expected Cluster.spec.infrastructureRef to point at ProxmoxCluster, got:\n%s", capiCluster)
+	}
+
+	controlPlane := byPath["clusters/basra-prod/capi-control-plane.yaml"]
+	if !strings.Contains(controlPlane, "infrastructureTemplate:") || !strings.Contains(controlPlane, "kind: ProxmoxMachineTemplate") {
+		t.Errorf("expected TalosControlPlane.spec.infrastructureTemplate to point at ProxmoxMachineTemplate, got:\n%s", controlPlane)
+	}
+
+	cpTemplate := byPath["clusters/basra-prod/capi-proxmox-machinetemplate-control-plane.yaml"]
+	if !strings.Contains(cpTemplate, "sourceNode: pve1") || !strings.Contains(cpTemplate, "templateID: 9000") {
+		t.Errorf("expected control plane ProxmoxMachineTemplate to reference the configured node/template, got:\n%s", cpTemplate)
+	}
+
+	workerMD := byPath["clusters/basra-prod/capi-machinedeployment-default.yaml"]
+	if !strings.Contains(workerMD, "infrastructureRef:") || !strings.Contains(workerMD, "kind: ProxmoxMachineTemplate") {
+		t.Errorf("expected worker MachineDeployment template to reference a ProxmoxMachineTemplate, got:\n%s", workerMD)
+	}
+}
+
+func TestClient_RenderManifests_OmitsProxmoxInfrastructureWhenNotConfigured(t *testing.T) {
+	c := &Client{}
+	files, err := c.RenderManifests(t.Context(), testCluster())
+	if err != nil {
+		t.Fatalf("RenderManifests: %v", err)
+	}
+	for _, f := range files {
+		if strings.Contains(f.Path, "proxmox") {
+			t.Errorf("expected no Proxmox files when not configured, got %s", f.Path)
+		}
+		if strings.Contains(string(f.Content), "infrastructureRef") {
+			t.Errorf("expected no infrastructureRef when not configured, file %s:\n%s", f.Path, f.Content)
+		}
+	}
+}
+
+func TestProxmoxInfrastructure_CredentialSecretName(t *testing.T) {
+	if got := (ProxmoxInfrastructure{}).credentialSecretName("basra-prod"); got != "basra-prod-proxmox-credentials" {
+		t.Errorf("expected default secret name, got %q", got)
+	}
+	custom := ProxmoxInfrastructure{CredentialSecretName: "custom-secret"}
+	if got := custom.credentialSecretName("basra-prod"); got != "custom-secret" {
+		t.Errorf("expected the configured secret name to override the default, got %q", got)
 	}
 }
 

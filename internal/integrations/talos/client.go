@@ -3,17 +3,24 @@
 // client (github.com/siderolabs/talos/pkg/machinery/client). See mock.go for
 // the deterministic stand-in used elsewhere in local development.
 //
-// LIMITATION (tracked in docs/roadmap.md): every method here is keyed only
-// by machine endpoint, matching the ports.TalosClient interface, but a real
-// multi-cluster deployment needs one credential set (talosconfig) per Talos
-// cluster. Client is therefore scoped to a single cluster's PKI for now —
-// multi-cluster credential resolution (per-cluster SecretRef lookup keyed by
-// endpoint) is a follow-up, not yet threaded through the port interface.
+// Multi-cluster credential handling (Phase 8): every method is keyed only by
+// machine endpoint, matching the ports.TalosClient interface — there is no
+// cluster ID parameter to route on. Client resolves per-call credentials by
+// endpoint instead: EnsureCredentials registers a talosconfig against a
+// specific endpoint (the caller — machineservice, the workflow engine —
+// resolves which cluster owns that endpoint and which talosconfig belongs to
+// it, via cluster.Cluster.TalosConfigRef and the SecretStore), and dial
+// looks up that registration before falling back to the single default
+// talosconfig the Client was constructed with. A single-cluster deployment
+// (the common case) never calls EnsureCredentials at all: every endpoint
+// just falls back to the default, exactly the original single-talosconfig
+// behavior.
 package talos
 
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	cosiresource "github.com/cosi-project/runtime/pkg/resource"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
@@ -35,18 +42,23 @@ import (
 // to the given endpoint (rather than proxying through another node), so
 // results always describe that specific machine.
 type Client struct {
-	cfg *clientconfig.Config
+	cfg *clientconfig.Config // the default talosconfig, may be nil if none was given to NewClient
+
+	mu         sync.RWMutex
+	byEndpoint map[string]*clientconfig.Config // explicit per-endpoint registrations, see EnsureCredentials
 }
 
 // NewClient parses a talosconfig YAML document (as produced by `talosctl
 // config` or a cluster's generated PKI bundle) and returns a Client that can
-// reach any node trusted by that config's current context.
+// reach any node trusted by that config's current context by default —
+// EnsureCredentials can register additional clusters' credentials on top of
+// this default for specific endpoints.
 func NewClient(talosconfigYAML []byte) (*Client, error) {
 	cfg, err := clientconfig.FromBytes(talosconfigYAML)
 	if err != nil {
 		return nil, fmt.Errorf("parsing talosconfig: %w", err)
 	}
-	return &Client{cfg: cfg}, nil
+	return &Client{cfg: cfg, byEndpoint: make(map[string]*clientconfig.Config)}, nil
 }
 
 // LoadClientFromSecretStore resolves a talosconfig from the platform's
@@ -61,8 +73,42 @@ func LoadClientFromSecretStore(ctx context.Context, store ports.SecretStore, ref
 	return NewClient(data)
 }
 
+func (c *Client) EnsureCredentials(_ context.Context, endpoint string, talosconfigYAML []byte) error {
+	cfg, err := clientconfig.FromBytes(talosconfigYAML)
+	if err != nil {
+		return fmt.Errorf("parsing talosconfig for endpoint %s: %w", endpoint, err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byEndpoint == nil {
+		c.byEndpoint = make(map[string]*clientconfig.Config)
+	}
+	c.byEndpoint[endpoint] = cfg
+	return nil
+}
+
+// configFor resolves the talosconfig to dial endpoint with: an explicit
+// EnsureCredentials registration if one exists for it, otherwise the
+// Client's default.
+func (c *Client) configFor(endpoint string) (*clientconfig.Config, error) {
+	c.mu.RLock()
+	cfg, ok := c.byEndpoint[endpoint]
+	c.mu.RUnlock()
+	if ok {
+		return cfg, nil
+	}
+	if c.cfg != nil {
+		return c.cfg, nil
+	}
+	return nil, fmt.Errorf("%w: no Talos credentials registered for endpoint %s and no default talosconfig configured", shared.ErrPreconditionFail, endpoint)
+}
+
 func (c *Client) dial(ctx context.Context, endpoint string) (*tclient.Client, error) {
-	cli, err := tclient.New(ctx, tclient.WithConfig(c.cfg), tclient.WithEndpoints(endpoint),
+	cfg, err := c.configFor(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	cli, err := tclient.New(ctx, tclient.WithConfig(cfg), tclient.WithEndpoints(endpoint),
 		tclient.WithGRPCDialOptions(grpc.WithStatsHandler(otelgrpc.NewClientHandler())))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to Talos endpoint %s: %w", endpoint, err)

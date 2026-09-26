@@ -16,6 +16,7 @@ import (
 
 	"github.com/talos-platform/talos-platform/internal/application/inframanager"
 	"github.com/talos-platform/talos-platform/internal/application/ports"
+	"github.com/talos-platform/talos-platform/internal/domain/cluster"
 	"github.com/talos-platform/talos-platform/internal/domain/infraprovider"
 	"github.com/talos-platform/talos-platform/internal/domain/machine"
 	"github.com/talos-platform/talos-platform/internal/domain/operation"
@@ -28,10 +29,46 @@ type Service struct {
 	talos          ports.TalosClient
 	infraProviders infraprovider.Repository
 	registry       *inframanager.Registry
+	// clusters/secretStore resolve per-cluster Talos credentials (Phase 8
+	// multi-cluster support, see ensureTalosCredentials) — both may be nil,
+	// which just falls back to the TalosClient adapter's single default
+	// talosconfig, the original single-cluster behavior.
+	clusters    cluster.Repository
+	secretStore ports.SecretStore
 }
 
-func New(machines machine.Repository, operations operation.Repository, talos ports.TalosClient, infraProviders infraprovider.Repository, registry *inframanager.Registry) *Service {
-	return &Service{machines: machines, operations: operations, talos: talos, infraProviders: infraProviders, registry: registry}
+func New(machines machine.Repository, operations operation.Repository, talos ports.TalosClient, infraProviders infraprovider.Repository, registry *inframanager.Registry, clusters cluster.Repository, secretStore ports.SecretStore) *Service {
+	return &Service{
+		machines: machines, operations: operations, talos: talos, infraProviders: infraProviders, registry: registry,
+		clusters: clusters, secretStore: secretStore,
+	}
+}
+
+// ensureTalosCredentials resolves and registers m's cluster's own Talos PKI
+// (cluster.Cluster.TalosConfigRef) with the TalosClient adapter before any
+// call keyed by m.ManagementIP, so a single platform process can reach more
+// than one Talos cluster's machines (Phase 8: multi-cluster credential
+// handling). A no-op whenever multi-cluster support isn't wired up
+// (s.clusters/s.secretStore nil), the machine has no assigned cluster yet,
+// or that cluster has no TalosConfigRef of its own — all of which fall back
+// to the adapter's single default talosconfig, the original single-cluster
+// behavior.
+func (s *Service) ensureTalosCredentials(ctx context.Context, m *machine.Machine) error {
+	if s.clusters == nil || s.secretStore == nil || m.ClusterID == nil {
+		return nil
+	}
+	c, err := s.clusters.Get(ctx, *m.ClusterID)
+	if err != nil {
+		return fmt.Errorf("resolving machine's cluster: %w", err)
+	}
+	if c.TalosConfigRef == "" {
+		return nil
+	}
+	data, err := s.secretStore.Get(ctx, ports.SecretRef{Backend: "talos", Path: c.TalosConfigRef})
+	if err != nil {
+		return fmt.Errorf("loading talosconfig for cluster %s: %w", c.Name, err)
+	}
+	return s.talos.EnsureCredentials(ctx, m.ManagementIP, data)
 }
 
 func (s *Service) Get(ctx context.Context, id shared.ID) (*machine.Machine, error) {
@@ -64,6 +101,9 @@ func (s *Service) DiscoverClusterTopology(ctx context.Context, seedEndpoint stri
 func (s *Service) Health(ctx context.Context, id shared.ID) (ports.HealthStatus, error) {
 	m, err := s.machines.Get(ctx, id)
 	if err != nil {
+		return ports.HealthStatus{}, err
+	}
+	if err := s.ensureTalosCredentials(ctx, m); err != nil {
 		return ports.HealthStatus{}, err
 	}
 	return s.talos.GetHealth(ctx, m.ManagementIP)
@@ -127,6 +167,9 @@ func (s *Service) runOperation(ctx context.Context, kind operation.Kind, machine
 	op, m, ok, err := s.beginOperation(ctx, kind, machineID, requestedBy, idempotencyKey)
 	if err != nil || !ok {
 		return op, err
+	}
+	if err := s.ensureTalosCredentials(ctx, m); err != nil {
+		return s.finishOperation(ctx, op, err)
 	}
 	return s.finishOperation(ctx, op, fn(ctx, m.ManagementIP))
 }

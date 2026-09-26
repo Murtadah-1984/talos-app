@@ -35,11 +35,7 @@ testable — no phase depends on unfinished work from a later phase to run.
       test (`TestClient_AgainstLiveEndpoint`) gated behind `TALOS_TEST_ENDPOINT`/
       `TALOS_TEST_CONFIG` env vars, skipped in CI since no live Talos node is available
       there — run it locally against a kind/QEMU Talos node or real hardware.
-- [ ] **Known limitation**: `Client` is constructed from a single talosconfig
-      (`PLATFORM_TALOS_CONFIG_FILE`), covering one Talos cluster's PKI per platform
-      process. `ports.TalosClient` methods are keyed only by machine endpoint, not
-      cluster ID, so a real multi-cluster deployment needs per-cluster credential
-      resolution threaded through — tracked as follow-up work, not yet implemented.
+- [x] Multi-cluster credential handling — closed in Phase 8, see below.
 - [x] Machine discovery (enumerating not-yet-known machines) — clarified, not built:
       this is really an infrastructure-provider concern (bare metal/Proxmox
       `DiscoverMachines`, §10, already real since Phase 6) once a machine already has
@@ -131,10 +127,9 @@ testable — no phase depends on unfinished work from a later phase to run.
       cluster alongside Machine-level readiness (Phase 8) — but still not orchestrated:
       there is no platform-initiated "replace this unhealthy machine" action, by
       design (ADR-0002 — that's CAPI's own controller's job).
-- [ ] **Provider-specific infrastructure CRs** (the `infrastructureRef` a real
-      deployment points at) are deliberately not rendered: no infrastructure provider
-      in this codebase is CAPI-aware yet (Phase 6 is still mock-only), so a fabricated
-      infra CRD shape would be more misleading than useful.
+- [x] **Provider-specific infrastructure CRs** — closed in Phase 8 for Proxmox, see
+      below; bare metal has no comparably established CAPI infrastructure provider to
+      target and remains CAPI-unaware (`DIRECT_TALOS` mode is its path).
 
 ## Phase 6 — Infrastructure Providers
 
@@ -276,8 +271,19 @@ limitation so the mock-vs-real story is complete everywhere.
       is a manual fallback for repositories that haven't registered the webhook.
 - [x] Cluster API **remediation observation** (observing CAPI's own
       MachineHealthCheck-driven replacement, not initiating it) — see Phase 5.
-- [ ] Cluster API **provider-specific infrastructure CRs** (the `infrastructureRef` a
-      real CAPI cluster needs — AWSCluster/vSphereCluster/etc.).
+- [x] Cluster API **provider-specific infrastructure CRs** for Proxmox —
+      `clusterapi.ProxmoxInfrastructure` (`internal/integrations/clusterapi/client.go`)
+      renders `ProxmoxCluster`/`ProxmoxMachineTemplate`
+      (`infrastructure.cluster.x-k8s.io/v1alpha1`, from
+      [cluster-api-provider-proxmox](https://github.com/ionos-cloud/cluster-api-provider-proxmox)
+      "CAPMOX") wired into `Cluster.spec.infrastructureRef`,
+      `TalosControlPlane.spec.infrastructureTemplate`, and each worker pool's
+      `infrastructureRef`, whenever `PLATFORM_PROXMOX_ADAPTER=real` — reusing the same
+      global Proxmox config the real `InfrastructureProvider` client already uses.
+      Zero value (Proxmox not configured) renders exactly as before: no
+      `infrastructureRef` at all. AWSCluster/vSphereCluster/etc. remain unbuilt — no
+      other infrastructure provider in this codebase is CAPI-aware, and bare metal has
+      no comparably established CAPI provider to target.
 - [x] Talos **cluster discovery** (`TalosClient.DiscoverClusterMembers`, inferring an
       existing cluster's topology in `DIRECT_TALOS` mode from one seed endpoint, via
       Talos's own discovery-service-backed Member resource), exposed as a live,
@@ -296,8 +302,18 @@ limitation so the mock-vs-real story is complete everywhere.
       configuration yet (Phase 6 providers create VMs/power on machines; they don't
       drive first-boot Talos config), so this lands as an available capability, the
       same way `ApplyMachineConfiguration` itself has no caller yet either.
-- [ ] Talos `Client` construction from more than a single talosconfig (multi-cluster
-      credential handling).
+- [x] Talos multi-cluster credential handling — `TalosClient.EnsureCredentials`
+      registers a talosconfig against a specific machine endpoint;
+      `talos.Client.dial` resolves per-endpoint credentials from that registry,
+      falling back to the adapter's single default talosconfig when nothing's been
+      explicitly registered (so single-cluster deployments, the common case, are
+      unaffected). `cluster.Cluster.TalosConfigRef` (migration 0008) points a
+      cluster at its own talosconfig in the SecretStore; `machineservice.Service`
+      and the `CLUSTER_PROVISION` workflow's `checkTalosHealth` both resolve and
+      register it before any Talos call for a machine belonging to that cluster.
+      `ports.TalosClient` methods are still keyed only by endpoint, not cluster ID
+      — this is endpoint-scoped credential resolution, not a signature change to
+      the whole interface.
 
 ## Non-goals (always)
 

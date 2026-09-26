@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/talos-platform/talos-platform/internal/application/ports"
@@ -16,6 +17,7 @@ import (
 	"github.com/talos-platform/talos-platform/internal/infrastructure/inprocess"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/postgres"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/rabbitmq"
+	"github.com/talos-platform/talos-platform/internal/infrastructure/secrets"
 	"github.com/talos-platform/talos-platform/internal/integrations/argocd"
 	"github.com/talos-platform/talos-platform/internal/integrations/clusterapi"
 	"github.com/talos-platform/talos-platform/internal/integrations/github"
@@ -92,15 +94,33 @@ func main() {
 		logger.Error("constructing Argo CD client", "error", err)
 		os.Exit(1)
 	}
-	capiProvider, err := clusterapi.NewFromConfig(cfg.ClusterAPIAdapterMode, cfg.ClusterAPIKubeconfigFile)
+	// See cmd/platform-api/main.go for why this reuses the same global
+	// Proxmox configuration as the real InfrastructureProvider client (§12
+	// CAPMOX rendering) — zero value when Proxmox isn't configured as "real".
+	var proxmoxInfra clusterapi.ProxmoxInfrastructure
+	if cfg.ProxmoxAdapterMode == "real" {
+		vmid, err := strconv.Atoi(cfg.ProxmoxTemplateVMID)
+		if err != nil {
+			logger.Error("invalid PLATFORM_PROXMOX_TEMPLATE_VMID", "error", err)
+			os.Exit(1)
+		}
+		proxmoxInfra = clusterapi.ProxmoxInfrastructure{Endpoint: cfg.ProxmoxAPIURL, Node: cfg.ProxmoxNode, TemplateVMID: vmid}
+	}
+	capiProvider, err := clusterapi.NewFromConfig(cfg.ClusterAPIAdapterMode, cfg.ClusterAPIKubeconfigFile, proxmoxInfra)
 	if err != nil {
 		logger.Error("constructing Cluster API client", "error", err)
+		os.Exit(1)
+	}
+	secretStore, err := secrets.NewFromConfig(cfg.SecretStoreBackend, cfg.VaultAddr, cfg.VaultToken, cfg.VaultMount, cfg.SecretStoreKeyHex)
+	if err != nil {
+		logger.Error("constructing secret store", "error", err)
 		os.Exit(1)
 	}
 
 	deps := workflows.ClusterProvisionDeps{
 		Clusters: clusters, Machines: machines, GitOps: gitopsRepo,
 		Talos: talosClient, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
+		SecretStore: secretStore,
 	}
 
 	engine := workflows.NewEngine(workflowRepo, broker, auditRepo)

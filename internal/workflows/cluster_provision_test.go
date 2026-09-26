@@ -6,12 +6,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/talos-platform/talos-platform/internal/application/ports"
 	"github.com/talos-platform/talos-platform/internal/domain/cluster"
 	"github.com/talos-platform/talos-platform/internal/domain/gitops"
 	"github.com/talos-platform/talos-platform/internal/domain/machine"
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
 	"github.com/talos-platform/talos-platform/internal/domain/workflow"
 	"github.com/talos-platform/talos-platform/internal/infrastructure/inprocess"
+	"github.com/talos-platform/talos-platform/internal/infrastructure/secrets"
 	"github.com/talos-platform/talos-platform/internal/integrations/argocd"
 	"github.com/talos-platform/talos-platform/internal/integrations/clusterapi"
 	mockgithub "github.com/talos-platform/talos-platform/internal/integrations/github"
@@ -84,6 +86,28 @@ type fakeMachineRepo struct{ machine.Repository }
 
 func (fakeMachineRepo) List(_ context.Context, _ machine.Filter, _ shared.Page) ([]*machine.Machine, error) {
 	return nil, nil
+}
+
+// fakeMachineRepoWithMachines is a minimal in-memory machine.Repository that
+// actually lists seeded machines, filtered by ClusterID — unlike
+// fakeMachineRepo, for tests exercising checkTalosHealth's per-machine
+// behavior instead of treating it as a no-op.
+type fakeMachineRepoWithMachines struct {
+	machine.Repository
+	machines []*machine.Machine
+}
+
+func (r fakeMachineRepoWithMachines) List(_ context.Context, filter machine.Filter, _ shared.Page) ([]*machine.Machine, error) {
+	if filter.ClusterID == nil {
+		return r.machines, nil
+	}
+	var out []*machine.Machine
+	for _, m := range r.machines {
+		if m.ClusterID != nil && *m.ClusterID == *filter.ClusterID {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 // fakeGitOpsRepo is a minimal in-memory gitops.Repositories covering only
@@ -320,6 +344,105 @@ func TestClusterProvisionWorkflow_EndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(changeSets[0].PullRequestURL, "/pull/") {
 		t.Fatalf("expected a pull request URL, got %q", changeSets[0].PullRequestURL)
+	}
+}
+
+// TestClusterProvisionWorkflow_RegistersPerClusterTalosCredentials exercises
+// Phase 8 multi-cluster credential handling: checkTalosHealth must resolve
+// the cluster's own TalosConfigRef and register it with the TalosClient
+// adapter for each of the cluster's machine endpoints before checking their
+// health, so one platform process can provision/manage more than one Talos
+// cluster's machines.
+func TestClusterProvisionWorkflow_RegistersPerClusterTalosCredentials(t *testing.T) {
+	clusters := newFakeClusterRepo()
+	gitopsRepo := newFakeGitOpsRepo()
+	gitProvider := mockgithub.NewMockProvider()
+	argoClient := argocd.NewMockClient()
+	capiProvider := clusterapi.NewMockProvider()
+	talosClient := mocktalos.NewMockClient()
+
+	secretStore, err := secrets.NewLocalStore("")
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+	talosconfig := []byte("context: basra-prod\ncontexts:\n  basra-prod: {}\n")
+	if err := secretStore.Put(context.Background(), ports.SecretRef{Backend: "talos", Path: "basra-prod-talosconfig"}, talosconfig); err != nil {
+		t.Fatalf("seeding secret store: %v", err)
+	}
+
+	repo := &gitops.GitRepository{ID: shared.NewID(), Owner: "acme", Name: "gitops", DefaultBranch: "main"}
+	if err := gitopsRepo.CreateRepository(context.Background(), repo); err != nil {
+		t.Fatalf("seeding git repository: %v", err)
+	}
+
+	c := &cluster.Cluster{
+		ID:             shared.NewID(),
+		SiteID:         shared.NewID(),
+		Name:           "basra-prod",
+		ProviderMode:   cluster.ProviderModeDirectTalos,
+		State:          cluster.StateProvisioning,
+		TalosConfigRef: "basra-prod-talosconfig",
+		Spec: cluster.Spec{
+			KubernetesVersion: "v1.31.1",
+			TalosVersion:      "v1.8.2",
+			ControlPlane:      cluster.ControlPlaneSpec{Replicas: 1},
+			Network:           cluster.NetworkSpec{PodCIDR: "10.244.0.0/16", ServiceCIDR: "10.96.0.0/12"},
+			ArgoCD:            cluster.ArgoCDSpec{Enabled: true, Project: "default"},
+		},
+	}
+	if err := clusters.Create(context.Background(), c); err != nil {
+		t.Fatalf("seeding cluster: %v", err)
+	}
+	if err := gitopsRepo.CreateGitOpsConfiguration(context.Background(), &gitops.GitOpsConfiguration{
+		ClusterID: c.ID, RepositoryID: repo.ID, Path: "clusters/basra-prod", Branch: repo.DefaultBranch,
+	}); err != nil {
+		t.Fatalf("seeding gitops configuration: %v", err)
+	}
+	argoClient.Seed(c.Name, "default", "default", "abc123")
+
+	m := &machine.Machine{ID: shared.NewID(), ClusterID: &c.ID, ManagementIP: "10.0.0.9", Hostname: "cp-1"}
+	machines := fakeMachineRepoWithMachines{machines: []*machine.Machine{m}}
+
+	deps := workflows.ClusterProvisionDeps{
+		Clusters: clusters, Machines: machines, GitOps: gitopsRepo,
+		Talos: talosClient, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
+		SecretStore: secretStore,
+	}
+
+	broker := inprocess.NewBroker()
+	workflowRepo := newFakeRepo()
+	engine := workflows.NewEngine(workflowRepo, broker, nil)
+	engine.Register(workflows.NewClusterProvisionDefinition(deps))
+	if err := engine.StartConsuming(context.Background()); err != nil {
+		t.Fatalf("StartConsuming: %v", err)
+	}
+	defer engine.Stop()
+
+	wf, err := engine.Enqueue(context.Background(), workflow.TypeClusterProvision, "multi-cluster-creds-test", nil, &c.ID, nil, shared.NewID())
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	gotWF, steps, err := engine.Get(context.Background(), wf.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if gotWF.Status != workflow.StatusSucceeded {
+		var failed string
+		for _, s := range steps {
+			if s.Status == workflow.StatusFailed {
+				failed = s.Name + ": " + s.Error
+			}
+		}
+		t.Fatalf("expected workflow to succeed, got %s (workflow error: %s, step error: %s)", gotWF.Status, gotWF.Error, failed)
+	}
+
+	got, ok := talosClient.CredentialsFor(m.ManagementIP)
+	if !ok {
+		t.Fatal("expected EnsureCredentials to have been called for the machine's endpoint")
+	}
+	if string(got) != string(talosconfig) {
+		t.Errorf("expected the cluster's own talosconfig to be registered, got %q", got)
 	}
 }
 

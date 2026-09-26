@@ -26,6 +26,10 @@ type ClusterProvisionDeps struct {
 	Git        ports.GitProvider
 	ArgoCD     ports.ArgoCDClient
 	ClusterAPI ports.ClusterAPIProvider
+	// SecretStore resolves cluster.Cluster.TalosConfigRef for multi-cluster
+	// Talos credential handling (checkTalosHealth) — may be nil, which just
+	// falls back to the TalosClient adapter's single default talosconfig.
+	SecretStore ports.SecretStore
 }
 
 // clusterStep adapts a function of (ctx, *cluster.Cluster) into a StepFunc by
@@ -187,7 +191,27 @@ func checkTalosHealth(ctx context.Context, deps ClusterProvisionDeps, c *cluster
 	if err != nil {
 		return 0, fmt.Errorf("listing machines for cluster %s: %w", c.Name, err)
 	}
+
+	// Register c's own Talos PKI (TalosConfigRef) for each machine's
+	// endpoint before calling into it — the workflow-engine counterpart to
+	// machineservice.Service.ensureTalosCredentials (Phase 8 multi-cluster
+	// credential handling). A no-op whenever deps.SecretStore is nil or c
+	// has no TalosConfigRef, both falling back to the TalosClient adapter's
+	// single default talosconfig, the original single-cluster behavior.
+	var talosConfigYAML []byte
+	if deps.SecretStore != nil && c.TalosConfigRef != "" {
+		talosConfigYAML, err = deps.SecretStore.Get(ctx, ports.SecretRef{Backend: "talos", Path: c.TalosConfigRef})
+		if err != nil {
+			return 0, fmt.Errorf("loading talosconfig for cluster %s: %w", c.Name, err)
+		}
+	}
+
 	for _, m := range machines {
+		if talosConfigYAML != nil {
+			if err := deps.Talos.EnsureCredentials(ctx, m.ManagementIP, talosConfigYAML); err != nil {
+				return 0, fmt.Errorf("registering talos credentials for machine %s (%s): %w", m.Hostname, m.ManagementIP, err)
+			}
+		}
 		health, err := deps.Talos.GetHealth(ctx, m.ManagementIP)
 		if err != nil {
 			return 0, fmt.Errorf("checking Talos health for machine %s (%s): %w", m.Hostname, m.ManagementIP, err)

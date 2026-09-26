@@ -6,22 +6,22 @@
 //     `MachineDeployment` resources (cluster.x-k8s.io/v1beta1, well-established
 //     upstream schema), plus `TalosControlPlane`/`TalosConfigTemplate`
 //     (from Sidero Labs' Cluster API Control Plane/Bootstrap Providers for
-//     Talos) rendered best-effort — those two CRDs are less universally
-//     documented than core CAPI, so treat their exact field names as a
-//     starting point to verify against the CACPPT/CABPT version actually
-//     installed in your management cluster, not a guarantee.
+//     Talos) and, when Proxmox infrastructure is configured (Phase 8),
+//     `ProxmoxCluster`/`ProxmoxMachineTemplate` (from
+//     github.com/ionos-cloud/cluster-api-provider-proxmox, "CAPMOX") wired
+//     into `infrastructureRef`/`infrastructureTemplate` — all rendered
+//     best-effort. These CRDs are less universally documented/stable than
+//     core CAPI, so treat their exact field names as a starting point to
+//     verify against the CACPPT/CABPT/CAPMOX version actually installed in
+//     your management cluster, not a guarantee.
 //   - GetClusterStatus is real, read-only observation against a CAPI
 //     management cluster's Kubernetes API (ADR-0002: "the platform must
 //     NOT duplicate Cluster API's reconciliation logic" — this client never
 //     writes Cluster API resources directly; manifests are written to Git,
 //     never applied here).
 //
-// Provider-specific infrastructure CRs (the `infrastructureRef` a real
-// deployment would point at — e.g. a bare-metal or Proxmox infra provider's
-// own Cluster API CRDs) are not rendered here: no infrastructure provider in
-// this codebase is CAPI-aware yet (Phase 6 is still mock-only), so
-// fabricating a specific infrastructure CRD shape would be more misleading
-// than useful. See docs/cluster-api/README.md.
+// Only Proxmox is CAPI-aware today (bare metal has no comparably established
+// CAPI infrastructure provider to target) — see docs/cluster-api/README.md.
 package clusterapi
 
 import (
@@ -42,14 +42,56 @@ import (
 	"github.com/talos-platform/talos-platform/internal/domain/shared"
 )
 
+// ProxmoxInfrastructure configures the CAPMOX-provider CRs RenderManifests
+// renders for a CLUSTER_API-mode cluster. The zero value means "not
+// configured": RenderManifests then renders core CAPI resources only, with
+// no infrastructureRef, exactly as before this existed — existing
+// DIRECT_TALOS and non-Proxmox CLUSTER_API callers are unaffected.
+//
+// Sourced from the same global configuration the real Proxmox
+// InfrastructureProvider client already uses (internal/integrations/proxmox)
+// rather than a per-organization infraprovider.InfrastructureProvider
+// record — the same "Phase 2-6 bootstrapping simplification, one process-wide
+// instance from global config" pattern documented in
+// docs/infrastructure/README.md, not a new inconsistency.
+type ProxmoxInfrastructure struct {
+	// Endpoint is the Proxmox API URL (e.g. "https://pve.example.com:8006").
+	// Empty means "not configured."
+	Endpoint string
+	// Node is the Proxmox node new VMs are created on.
+	Node string
+	// TemplateVMID is the pre-built Talos VM template CAPMOX clones.
+	TemplateVMID int
+	// CredentialSecretName is the name of a Kubernetes Secret, already
+	// present in the management cluster's default namespace, holding
+	// Proxmox API credentials in the shape CAPMOX's ProxmoxCluster
+	// credentialsRef expects. The platform does not create this Secret —
+	// unlike GitOps-committed manifests, a live credential Secret in the
+	// management cluster is provisioned out of band by the operator, the
+	// same way every other CAPI infrastructure provider's credentials are.
+	// Defaults to "<cluster-name>-proxmox-credentials" when empty.
+	CredentialSecretName string
+}
+
+func (p ProxmoxInfrastructure) configured() bool { return p.Endpoint != "" }
+
+func (p ProxmoxInfrastructure) credentialSecretName(clusterName string) string {
+	if p.CredentialSecretName != "" {
+		return p.CredentialSecretName
+	}
+	return clusterName + "-proxmox-credentials"
+}
+
 // Client is the real ports.ClusterAPIProvider adapter.
 type Client struct {
-	dyn dynamic.Interface
+	dyn     dynamic.Interface
+	proxmox ProxmoxInfrastructure
 }
 
 // NewClient builds a Client from a kubeconfig pointing at a Cluster API
-// management cluster.
-func NewClient(kubeconfigPath string) (*Client, error) {
+// management cluster. proxmox is optional (zero value disables Proxmox
+// infrastructure CR rendering).
+func NewClient(kubeconfigPath string, proxmox ProxmoxInfrastructure) (*Client, error) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading management cluster kubeconfig: %w", err)
@@ -61,7 +103,7 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building dynamic client: %w", err)
 	}
-	return &Client{dyn: dyn}, nil
+	return &Client{dyn: dyn, proxmox: proxmox}, nil
 }
 
 var (
@@ -203,6 +245,10 @@ type capiCluster struct {
 type capiClusterSpec struct {
 	ClusterNetwork  clusterNetwork `yaml:"clusterNetwork"`
 	ControlPlaneRef objectRef      `yaml:"controlPlaneRef"`
+	// InfrastructureRef points at this cluster's infrastructure provider CR
+	// (e.g. ProxmoxCluster). Omitted (zero value) when no infrastructure
+	// provider is CAPI-aware for this cluster.
+	InfrastructureRef *objectRef `yaml:"infrastructureRef,omitempty"`
 }
 
 type clusterNetwork struct {
@@ -257,6 +303,10 @@ type machineTemplateSpec struct {
 	ClusterName string    `yaml:"clusterName"`
 	Version     string    `yaml:"version"`
 	Bootstrap   bootstrap `yaml:"bootstrap"`
+	// InfrastructureRef points at this machine's infrastructure provider
+	// template CR (e.g. ProxmoxMachineTemplate). Omitted (zero value) when
+	// no infrastructure provider is CAPI-aware for this cluster.
+	InfrastructureRef *objectRef `yaml:"infrastructureRef,omitempty"`
 }
 
 type bootstrap struct {
@@ -285,11 +335,62 @@ type talosConfigSpec struct {
 	TalosVersion string `yaml:"talosVersion"`
 }
 
+// proxmoxCluster mirrors infrastructure.cluster.x-k8s.io/v1alpha1
+// ProxmoxCluster from github.com/ionos-cloud/cluster-api-provider-proxmox
+// ("CAPMOX") — best-effort, see the package doc comment.
+type proxmoxCluster struct {
+	typeMeta `yaml:",inline"`
+	Metadata objectMeta         `yaml:"metadata"`
+	Spec     proxmoxClusterSpec `yaml:"spec"`
+}
+
+type proxmoxClusterSpec struct {
+	ControlPlaneEndpoint controlPlaneEndpoint `yaml:"controlPlaneEndpoint"`
+	AllowedNodes         []string             `yaml:"allowedNodes"`
+	CredentialsRef       credentialsRef       `yaml:"credentialsRef"`
+}
+
+type controlPlaneEndpoint struct {
+	Host string `yaml:"host"`
+	Port int32  `yaml:"port"`
+}
+
+type credentialsRef struct {
+	Name string `yaml:"name"`
+}
+
+// proxmoxMachineTemplate mirrors infrastructure.cluster.x-k8s.io/v1alpha1
+// ProxmoxMachineTemplate ("CAPMOX") — best-effort, see the package doc
+// comment.
+type proxmoxMachineTemplate struct {
+	typeMeta `yaml:",inline"`
+	Metadata objectMeta                 `yaml:"metadata"`
+	Spec     proxmoxMachineTemplateSpec `yaml:"spec"`
+}
+
+type proxmoxMachineTemplateSpec struct {
+	Template proxmoxMachineTemplateInner `yaml:"template"`
+}
+
+type proxmoxMachineTemplateInner struct {
+	Spec proxmoxMachineSpec `yaml:"spec"`
+}
+
+type proxmoxMachineSpec struct {
+	SourceNode string `yaml:"sourceNode"`
+	TemplateID int    `yaml:"templateID"`
+}
+
 const (
 	capiAPIVersion       = "cluster.x-k8s.io/v1beta1"
 	cacpptAPIVersion     = "controlplane.cluster.x-k8s.io/v1alpha3"
 	cabptAPIVersion      = "bootstrap.cluster.x-k8s.io/v1alpha3"
+	capmoxAPIVersion     = "infrastructure.cluster.x-k8s.io/v1alpha1"
 	defaultCAPINamespace = "default"
+	// defaultKubeAPIPort is the standard kube-apiserver port, used as the
+	// ProxmoxCluster controlPlaneEndpoint's port — CAPMOX doesn't infer this,
+	// and this codebase has no per-cluster override for it yet.
+	defaultKubeAPIPort = 6443
 )
 
 // RenderManifests renders the Cluster API resource set for c: Cluster,
@@ -310,6 +411,26 @@ func (c *Client) RenderManifests(_ context.Context, cl *cluster.Cluster) ([]port
 		Namespace:  ns,
 	}
 
+	var clusterInfraRef *objectRef
+	if c.proxmox.configured() {
+		proxmoxClusterRef := objectRef{APIVersion: capmoxAPIVersion, Kind: "ProxmoxCluster", Name: cl.Name, Namespace: ns}
+		clusterInfraRef = &proxmoxClusterRef
+
+		pcYAML, err := marshalCAPI(proxmoxCluster{
+			typeMeta: typeMeta{APIVersion: capmoxAPIVersion, Kind: "ProxmoxCluster"},
+			Metadata: objectMeta{Name: cl.Name, Namespace: ns},
+			Spec: proxmoxClusterSpec{
+				ControlPlaneEndpoint: controlPlaneEndpoint{Host: cl.Endpoint, Port: defaultKubeAPIPort},
+				AllowedNodes:         []string{c.proxmox.Node},
+				CredentialsRef:       credentialsRef{Name: c.proxmox.credentialSecretName(cl.Name)},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("rendering ProxmoxCluster: %w", err)
+		}
+		files = append(files, ports.FileChange{Path: base + "/capi-proxmox-cluster.yaml", Content: pcYAML})
+	}
+
 	clusterYAML, err := marshalCAPI(capiCluster{
 		typeMeta: typeMeta{APIVersion: capiAPIVersion, Kind: "Cluster"},
 		Metadata: objectMeta{Name: cl.Name, Namespace: ns},
@@ -318,7 +439,8 @@ func (c *Client) RenderManifests(_ context.Context, cl *cluster.Cluster) ([]port
 				Pods:     cidrBlocks{CIDRBlocks: []string{cl.Spec.Network.PodCIDR}},
 				Services: cidrBlocks{CIDRBlocks: []string{cl.Spec.Network.ServiceCIDR}},
 			},
-			ControlPlaneRef: controlPlaneRef,
+			ControlPlaneRef:   controlPlaneRef,
+			InfrastructureRef: clusterInfraRef,
 		},
 	})
 	if err != nil {
@@ -326,12 +448,31 @@ func (c *Client) RenderManifests(_ context.Context, cl *cluster.Cluster) ([]port
 	}
 	files = append(files, ports.FileChange{Path: base + "/capi-cluster.yaml", Content: clusterYAML})
 
+	var cpInfraTemplate objectRef
+	if c.proxmox.configured() {
+		cpInfraTemplate = objectRef{APIVersion: capmoxAPIVersion, Kind: "ProxmoxMachineTemplate", Name: controlPlaneRef.Name, Namespace: ns}
+		pmtYAML, err := marshalCAPI(proxmoxMachineTemplate{
+			typeMeta: typeMeta{APIVersion: capmoxAPIVersion, Kind: "ProxmoxMachineTemplate"},
+			Metadata: objectMeta{Name: controlPlaneRef.Name, Namespace: ns},
+			Spec: proxmoxMachineTemplateSpec{
+				Template: proxmoxMachineTemplateInner{
+					Spec: proxmoxMachineSpec{SourceNode: c.proxmox.Node, TemplateID: c.proxmox.TemplateVMID},
+				},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("rendering ProxmoxMachineTemplate for control plane: %w", err)
+		}
+		files = append(files, ports.FileChange{Path: base + "/capi-proxmox-machinetemplate-control-plane.yaml", Content: pmtYAML})
+	}
+
 	cpYAML, err := marshalCAPI(talosControlPlane{
 		typeMeta: typeMeta{APIVersion: cacpptAPIVersion, Kind: "TalosControlPlane"},
 		Metadata: objectMeta{Name: controlPlaneRef.Name, Namespace: ns},
 		Spec: talosControlPlaneSpec{
-			Replicas: cl.Spec.ControlPlane.Replicas,
-			Version:  cl.Spec.KubernetesVersion,
+			Replicas:               cl.Spec.ControlPlane.Replicas,
+			Version:                cl.Spec.KubernetesVersion,
+			InfrastructureTemplate: cpInfraTemplate,
 		},
 	})
 	if err != nil {
@@ -343,6 +484,26 @@ func (c *Client) RenderManifests(_ context.Context, cl *cluster.Cluster) ([]port
 		mdName := fmt.Sprintf("%s-%s", cl.Name, pool.Name)
 		configRef := objectRef{APIVersion: cabptAPIVersion, Kind: "TalosConfigTemplate", Name: mdName, Namespace: ns}
 
+		var workerInfraRef *objectRef
+		if c.proxmox.configured() {
+			proxmoxMTRef := objectRef{APIVersion: capmoxAPIVersion, Kind: "ProxmoxMachineTemplate", Name: mdName, Namespace: ns}
+			workerInfraRef = &proxmoxMTRef
+
+			pmtYAML, err := marshalCAPI(proxmoxMachineTemplate{
+				typeMeta: typeMeta{APIVersion: capmoxAPIVersion, Kind: "ProxmoxMachineTemplate"},
+				Metadata: objectMeta{Name: mdName, Namespace: ns},
+				Spec: proxmoxMachineTemplateSpec{
+					Template: proxmoxMachineTemplateInner{
+						Spec: proxmoxMachineSpec{SourceNode: c.proxmox.Node, TemplateID: c.proxmox.TemplateVMID},
+					},
+				},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("rendering ProxmoxMachineTemplate for pool %q: %w", pool.Name, err)
+			}
+			files = append(files, ports.FileChange{Path: fmt.Sprintf("%s/capi-proxmox-machinetemplate-%s.yaml", base, pool.Name), Content: pmtYAML})
+		}
+
 		mdYAML, err := marshalCAPI(machineDeployment{
 			typeMeta: typeMeta{APIVersion: capiAPIVersion, Kind: "MachineDeployment"},
 			Metadata: objectMeta{Name: mdName, Namespace: ns, Labels: map[string]string{"cluster.x-k8s.io/cluster-name": cl.Name}},
@@ -353,9 +514,10 @@ func (c *Client) RenderManifests(_ context.Context, cl *cluster.Cluster) ([]port
 				Template: machineTemplate{
 					Metadata: objectMeta{Name: mdName, Labels: map[string]string{"cluster.x-k8s.io/cluster-name": cl.Name, "pool": pool.Name}},
 					Spec: machineTemplateSpec{
-						ClusterName: cl.Name,
-						Version:     cl.Spec.KubernetesVersion,
-						Bootstrap:   bootstrap{ConfigRef: configRef},
+						ClusterName:       cl.Name,
+						Version:           cl.Spec.KubernetesVersion,
+						Bootstrap:         bootstrap{ConfigRef: configRef},
+						InfrastructureRef: workerInfraRef,
 					},
 				},
 			},

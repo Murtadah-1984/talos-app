@@ -38,6 +38,64 @@ func TestNewClient_RejectsInvalidYAML(t *testing.T) {
 	}
 }
 
+const otherClusterTalosconfig = `
+context: other
+contexts:
+  other:
+    endpoints:
+      - 10.1.0.1
+    ca: b3RoZXItY2E=
+    crt: b3RoZXItY3J0
+    key: b3RoZXIta2V5
+`
+
+func TestClient_ConfigFor_FallsBackToDefault(t *testing.T) {
+	c, err := NewClient([]byte(testTalosconfig))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	cfg, err := c.configFor("10.0.0.1")
+	if err != nil {
+		t.Fatalf("configFor: %v", err)
+	}
+	if cfg != c.cfg {
+		t.Error("expected an unregistered endpoint to resolve to the default talosconfig")
+	}
+}
+
+func TestClient_ConfigFor_PrefersRegisteredCredentials(t *testing.T) {
+	c, err := NewClient([]byte(testTalosconfig))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if err := c.EnsureCredentials(context.Background(), "10.1.0.5", []byte(otherClusterTalosconfig)); err != nil {
+		t.Fatalf("EnsureCredentials: %v", err)
+	}
+
+	registered, err := c.configFor("10.1.0.5")
+	if err != nil {
+		t.Fatalf("configFor(registered): %v", err)
+	}
+	if registered == c.cfg {
+		t.Error("expected the registered endpoint to resolve to its own config, not the default")
+	}
+
+	fallback, err := c.configFor("10.0.0.1")
+	if err != nil {
+		t.Fatalf("configFor(unregistered): %v", err)
+	}
+	if fallback != c.cfg {
+		t.Error("expected an unregistered endpoint to still resolve to the default talosconfig")
+	}
+}
+
+func TestClient_ConfigFor_NoDefaultAndNoRegistration_Errors(t *testing.T) {
+	c := &Client{} // no default config, nothing registered
+	if _, err := c.configFor("10.0.0.1"); err == nil {
+		t.Fatal("expected an error when no default config and no registration exist for the endpoint")
+	}
+}
+
 func TestApplyModeFor(t *testing.T) {
 	tests := map[string]machineapi.ApplyConfigurationRequest_Mode{
 		"no-reboot": machineapi.ApplyConfigurationRequest_NO_REBOOT,

@@ -27,7 +27,10 @@ Every provider implements `ports.InfrastructureProvider`
   template (§12's "Talos image/template deployment"), resource sizing, start/stop/
   reset, deletion, and status polling. Enable via `PLATFORM_PROXMOX_ADAPTER=real` +
   `PLATFORM_PROXMOX_API_URL`/`PLATFORM_PROXMOX_NODE`/`PLATFORM_PROXMOX_API_TOKEN`/
-  `PLATFORM_PROXMOX_TEMPLATE_VMID`.
+  `PLATFORM_PROXMOX_TEMPLATE_VMID`. This same configuration also drives Proxmox
+  infrastructure CR rendering (`ProxmoxCluster`/`ProxmoxMachineTemplate`) for
+  `CLUSTER_API`-mode clusters — see
+  [../cluster-api/README.md](../cluster-api/README.md#proxmox-infrastructure-crs).
 
 Both fall back to their in-memory mocks by default (`PLATFORM_PROXMOX_ADAPTER=mock`;
 bare metal's controllers default to `NoopPowerController` until explicitly enabled).

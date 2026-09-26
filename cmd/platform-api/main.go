@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -130,11 +131,6 @@ func main() {
 		logger.Error("constructing Argo CD client", "error", err)
 		os.Exit(1)
 	}
-	capiProvider, err := clusterapi.NewFromConfig(cfg.ClusterAPIAdapterMode, cfg.ClusterAPIKubeconfigFile)
-	if err != nil {
-		logger.Error("constructing Cluster API client", "error", err)
-		os.Exit(1)
-	}
 
 	secretStore, err := secrets.NewFromConfig(cfg.SecretStoreBackend, cfg.VaultAddr, cfg.VaultToken, cfg.VaultMount, cfg.SecretStoreKeyHex)
 	if err != nil {
@@ -146,6 +142,25 @@ func main() {
 		logger.Error("constructing Proxmox client", "error", err)
 		os.Exit(1)
 	}
+
+	// The Cluster API client's Proxmox infrastructure CR rendering (§12
+	// CAPMOX) reuses the same global Proxmox configuration as the real
+	// InfrastructureProvider client above — zero value when Proxmox isn't
+	// configured as "real", which simply disables that rendering.
+	var proxmoxInfra clusterapi.ProxmoxInfrastructure
+	if cfg.ProxmoxAdapterMode == "real" {
+		vmid, err := strconv.Atoi(cfg.ProxmoxTemplateVMID)
+		if err != nil {
+			logger.Error("invalid PLATFORM_PROXMOX_TEMPLATE_VMID", "error", err)
+			os.Exit(1)
+		}
+		proxmoxInfra = clusterapi.ProxmoxInfrastructure{Endpoint: cfg.ProxmoxAPIURL, Node: cfg.ProxmoxNode, TemplateVMID: vmid}
+	}
+	capiProvider, err := clusterapi.NewFromConfig(cfg.ClusterAPIAdapterMode, cfg.ClusterAPIKubeconfigFile, proxmoxInfra)
+	if err != nil {
+		logger.Error("constructing Cluster API client", "error", err)
+		os.Exit(1)
+	}
 	bareMetalProvider := baremetal.NewProviderFromConfig(secretStore, cfg.BareMetalIPMIEnabled, cfg.BareMetalRedfishEnabled)
 	infraRegistry := inframanager.NewRegistry(map[infraprovider.Type]ports.InfrastructureProvider{
 		infraprovider.TypeProxmox:   proxmoxProvider,
@@ -155,6 +170,7 @@ func main() {
 	workflowDeps := workflows.ClusterProvisionDeps{
 		Clusters: clusters, Machines: machines, GitOps: gitopsRepo,
 		Talos: talosClient, Git: gitProvider, ArgoCD: argoClient, ClusterAPI: capiProvider,
+		SecretStore: secretStore,
 	}
 
 	engine := workflows.NewEngine(workflowRepo, broker, auditRepo)
@@ -177,7 +193,7 @@ func main() {
 	}
 	authSvc := authservice.New(users, tokenIssuer)
 	clusterSvc := clusterservice.New(clusters, gitopsRepo, engine, argoClient, gitProvider)
-	machineSvc := machineservice.New(machines, operations, talosClient, infraProviders, infraRegistry)
+	machineSvc := machineservice.New(machines, operations, talosClient, infraProviders, infraRegistry, clusters, secretStore)
 
 	metrics := observability.NewMetrics()
 

@@ -49,12 +49,27 @@ create `machine.Machine` records, since this codebase has no machine
 registration/import path yet (every existing machine record comes from an
 infrastructure provider's own `ProvisionMachine` call).
 
+## Multi-cluster credential handling
+
+One platform process can manage more than one Talos cluster's machines.
+`ports.TalosClient` methods are still keyed only by machine endpoint (not cluster
+ID) — there's no interface-wide redesign here. Instead:
+
+- `cluster.Cluster.TalosConfigRef` points a cluster at its own talosconfig in the
+  SecretStore. Empty means "use this process's single default talosconfig"
+  (`PLATFORM_TALOS_CONFIG_FILE`) — the original single-cluster behavior, unchanged
+  for deployments that don't set it.
+- `TalosClient.EnsureCredentials(ctx, endpoint, talosconfigYAML)` registers a
+  talosconfig against a specific endpoint. `Client.dial` resolves the config to use
+  for a given endpoint from that registry first, falling back to the default.
+- `machineservice.Service.ensureTalosCredentials` and the `CLUSTER_PROVISION`
+  workflow's `checkTalosHealth` (`internal/workflows/cluster_provision.go`) both
+  resolve a machine's cluster's `TalosConfigRef` (when set) via the SecretStore and
+  call `EnsureCredentials` before any other Talos call for that machine — so callers
+  never need to think about credential registration explicitly.
+
 ## Known limitations (tracked in [../roadmap.md](../roadmap.md))
 
-- **Single cluster per process.** `Client` holds one talosconfig, so one platform
-  deployment currently manages the PKI of one Talos cluster. `ports.TalosClient`
-  methods are keyed by endpoint only; per-cluster credential resolution keyed off the
-  target cluster isn't threaded through yet.
 - **Kubernetes version is not populated.** Talos's API doesn't expose it; it belongs
   to a future Kubernetes API integration, not this one.
 

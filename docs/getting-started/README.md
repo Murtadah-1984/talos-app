@@ -54,8 +54,10 @@ export PLATFORM_TALOS_ADAPTER=real
 export PLATFORM_TALOS_CONFIG_FILE=/path/to/talosconfig   # from `talosctl config`
 ```
 
-See [../talos/README.md](../talos/README.md) for what the real client does and its
-current limitations.
+This is the default talosconfig every machine falls back to. To manage more than one
+Talos cluster from one platform process, set `TalosConfigRef` on each additional
+cluster's record to a SecretStore path holding that cluster's own talosconfig — see
+[../talos/README.md](../talos/README.md#multi-cluster-credential-handling).
 
 ## GitHub: mock vs. real
 
